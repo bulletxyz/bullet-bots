@@ -1,0 +1,20 @@
+[package]
+name = "bb-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core framework for bullet-bots trading system"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+rand = { workspace = true }
+axum = { workspace = true }

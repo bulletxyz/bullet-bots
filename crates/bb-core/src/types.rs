@@ -1,0 +1,242 @@
+use std::collections::BTreeMap;
+
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Buy,
+    Sell,
+}
+
+impl Side {
+    pub fn opposite(self) -> Self {
+        match self {
+            Side::Buy => Side::Sell,
+            Side::Sell => Side::Buy,
+        }
+    }
+}
+
+impl std::fmt::Display for Side {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Side::Buy => write!(f, "buy"),
+            Side::Sell => write!(f, "sell"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OrderType {
+    Limit,
+    PostOnly,
+    Market,
+}
+
+impl std::fmt::Display for OrderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrderType::Limit => write!(f, "limit"),
+            OrderType::PostOnly => write!(f, "post_only"),
+            OrderType::Market => write!(f, "market"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OrderStatus {
+    Open,
+    PartiallyFilled,
+    Filled,
+    Cancelled,
+    Rejected,
+}
+
+#[derive(Debug, Clone)]
+pub struct Level {
+    pub price: Decimal,
+    pub quantity: Decimal,
+}
+
+/// Order book with bids (descending by price) and asks (ascending by price).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct OrderBook {
+    pub bids: BTreeMap<Decimal, Decimal>,
+    pub asks: BTreeMap<Decimal, Decimal>,
+    pub last_update_id: u64,
+}
+
+impl OrderBook {
+    pub fn best_bid(&self) -> Option<Level> {
+        self.bids.iter().next_back().map(|(&price, &quantity)| Level { price, quantity })
+    }
+
+    pub fn best_ask(&self) -> Option<Level> {
+        self.asks.iter().next().map(|(&price, &quantity)| Level { price, quantity })
+    }
+
+    pub fn midpoint(&self) -> Option<Decimal> {
+        match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => Some((bid.price + ask.price) / Decimal::from(2)),
+            _ => None,
+        }
+    }
+
+    pub fn spread(&self) -> Option<Decimal> {
+        match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => Some(ask.price - bid.price),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Order {
+    pub id: String,
+    pub client_id: Option<String>,
+    pub symbol: String,
+    pub side: Side,
+    pub order_type: OrderType,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub filled_quantity: Decimal,
+    pub status: OrderStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewOrder {
+    pub symbol: String,
+    pub side: Side,
+    pub order_type: OrderType,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub client_id: Option<String>,
+    pub reduce_only: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CancelOrder {
+    pub symbol: String,
+    pub order_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderResult {
+    pub order_id: String,
+    pub client_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CancelResult {
+    pub order_id: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Position {
+    pub symbol: String,
+    pub side: Option<Side>,
+    pub size: Decimal,
+    pub entry_price: Decimal,
+    pub unrealized_pnl: Decimal,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Balance {
+    pub asset: String,
+    pub available: Decimal,
+    pub total: Decimal,
+}
+
+/// Events pushed from an exchange to the engine/strategy.
+#[derive(Debug, Clone)]
+pub enum ExchangeEvent {
+    /// Orderbook snapshot or update.
+    BookUpdate { exchange: String, symbol: String, orderbook: OrderBook },
+    /// An order's status changed.
+    OrderUpdate { exchange: String, order: Order },
+    /// A trade executed against our account.
+    Trade {
+        exchange: String,
+        symbol: String,
+        order_id: String,
+        side: Side,
+        price: Decimal,
+        quantity: Decimal,
+        is_maker: bool,
+    },
+    /// Mark price and/or funding rate update.
+    MarkPrice { exchange: String, symbol: String, mark_price: Decimal, funding_rate: Decimal },
+    /// Connection was lost. The engine will handle reconnection.
+    Disconnected { exchange: String },
+}
+
+impl ExchangeEvent {
+    pub fn exchange_name(&self) -> &str {
+        match self {
+            ExchangeEvent::BookUpdate { exchange, .. } => exchange,
+            ExchangeEvent::OrderUpdate { exchange, .. } => exchange,
+            ExchangeEvent::Trade { exchange, .. } => exchange,
+            ExchangeEvent::MarkPrice { exchange, .. } => exchange,
+            ExchangeEvent::Disconnected { exchange } => exchange,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orderbook_midpoint() {
+        let mut book = OrderBook::default();
+        book.bids.insert(Decimal::from(100), Decimal::from(1));
+        book.asks.insert(Decimal::from(102), Decimal::from(1));
+        assert_eq!(book.midpoint(), Some(Decimal::from(101)));
+    }
+
+    #[test]
+    fn orderbook_spread() {
+        let mut book = OrderBook::default();
+        book.bids.insert(Decimal::from(100), Decimal::from(1));
+        book.asks.insert(Decimal::from(102), Decimal::from(1));
+        assert_eq!(book.spread(), Some(Decimal::from(2)));
+    }
+
+    #[test]
+    fn orderbook_best_bid_ask() {
+        let mut book = OrderBook::default();
+        book.bids.insert(Decimal::from(99), Decimal::from(5));
+        book.bids.insert(Decimal::from(100), Decimal::from(3));
+        book.asks.insert(Decimal::from(101), Decimal::from(2));
+        book.asks.insert(Decimal::from(102), Decimal::from(4));
+
+        let best_bid = book.best_bid().unwrap();
+        assert_eq!(best_bid.price, Decimal::from(100));
+        assert_eq!(best_bid.quantity, Decimal::from(3));
+
+        let best_ask = book.best_ask().unwrap();
+        assert_eq!(best_ask.price, Decimal::from(101));
+        assert_eq!(best_ask.quantity, Decimal::from(2));
+    }
+
+    #[test]
+    fn empty_orderbook() {
+        let book = OrderBook::default();
+        assert!(book.best_bid().is_none());
+        assert!(book.best_ask().is_none());
+        assert!(book.midpoint().is_none());
+        assert!(book.spread().is_none());
+    }
+
+    #[test]
+    fn side_opposite() {
+        assert_eq!(Side::Buy.opposite(), Side::Sell);
+        assert_eq!(Side::Sell.opposite(), Side::Buy);
+    }
+}

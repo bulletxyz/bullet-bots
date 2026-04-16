@@ -1,0 +1,27 @@
+[package]
+name = "bb-bot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Binary entrypoint for bullet-bots trading system"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bb-bot"
+path = "src/main.rs"
+
+[dependencies]
+bb-core = { workspace = true }
+bb-exchange-bullet = { workspace = true }
+bb-exchange-hyperliquid = { workspace = true }
+bb-strategy-grid = { workspace = true }
+bb-strategy-funding-arb = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }

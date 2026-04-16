@@ -1,0 +1,29 @@
+# Grid trading bot example config for Bullet testnet.
+# Run with: cargo run --bin bb-bot -- run --config config/grid-example.toml
+
+[engine]
+symbol = "BTC-USD"
+tick_interval_ms = 5000
+reconnect_max_delay_ms = 60000
+status_port = 3030
+
+[exchanges.bullet]
+type = "bullet"
+network = "testnet"
+# Set via environment: export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+private_key_hex = ""
+
+[strategy]
+type = "grid"
+
+[strategy.grid]
+num_levels = 5
+spacing_mode = "geometric"
+grid_spacing = "0.5"
+order_size = "0.001"
+order_type = "PostOnly"
+max_position = "0.01"
+rebalance_threshold_pct = "3.0"
+
+[logging]
+level = "info"

@@ -1,0 +1,18 @@
+# Format with: cargo +nightly fmt
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+use_field_init_shorthand = true
+use_small_heuristics = "Max"
+newline_style = "Unix"
+
+# Import organization (nightly-only)
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+
+# Doc comment and macro formatting (nightly-only)
+format_code_in_doc_comments = true
+doc_comment_code_block_width = 100
+format_macro_matchers = true
+wrap_comments = true
+comment_width = 100
