@@ -1,0 +1,38 @@
+# Static grid tuned for rapid fill generation on Bullet testnet.
+#
+# Tight range (~1% span) with many levels means small market moves cross
+# several levels, so you see fills within a minute or two — useful for
+# verifying the fill-handling path end-to-end without waiting for large
+# price swings.
+#
+# Run: cargo run --bin bb-bot -- run --config config/grid-tight.toml
+#
+# IMPORTANT: set `lower_price` and `upper_price` to straddle the current
+# BTC mid on testnet. If the range doesn't overlap the top of book the
+# grid starts idle and stays idle. `would_cross` will warn on init if
+# levels collide with the live market.
+
+[engine]
+tick_interval_ms = 2000
+status_port = 3030
+
+[exchanges.bullet]
+type = "bullet"
+network = "testnet"
+private_key_hex = ""
+
+[strategy]
+type = "grid"
+
+[strategy.grid]
+symbol = "BTC-USD"
+# ~1% range — adjust to current testnet mid before running.
+lower_price = "77000"
+upper_price = "78000"
+num_levels = 21                 # spacing = $50 (~0.065%) at $77.5k mid
+order_size = "0.0001"           # LOT_SIZE minimum for BTC-USD
+order_type = "post_only"
+max_position = "0.002"          # 20 levels' worth of one-sided fills
+
+[logging]
+level = "info"
