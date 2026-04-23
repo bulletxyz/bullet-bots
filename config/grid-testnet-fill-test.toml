@@ -1,0 +1,35 @@
+# Tight grid designed to actually get filled so we can verify the fill-handling
+# path (record_fill, mark_filled, opposite-side replacement).
+#
+# Geometry at BTC ≈ $78k with 0.02% spacing:
+#   level-1 buy  ≈ $15.6 below mid  → lands on or just below best bid
+#   level-1 sell ≈ $15.6 above mid  → lands on or just below best ask
+#
+# PostOnly so we stay maker (no taker fee leak; the point is to verify our
+# side of the fill pipeline, not to take).
+
+[engine]
+symbol = "BTC-USD"
+tick_interval_ms = 2000
+reconnect_max_delay_ms = 60000
+status_port = 3030
+
+[exchanges.bullet]
+type = "bullet"
+network = "testnet"
+private_key_hex = ""
+
+[strategy]
+type = "grid"
+
+[strategy.grid]
+num_levels = 5
+spacing_mode = "geometric"
+grid_spacing = "0.02"
+order_size = "0.0001"
+order_type = "PostOnly"
+max_position = "0.002"
+rebalance_threshold_pct = "0.1"
+
+[logging]
+level = "info"

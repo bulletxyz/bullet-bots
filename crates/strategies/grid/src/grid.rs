@@ -21,6 +21,10 @@ pub struct GridLevel {
     pub side: Side,
     pub price: Decimal,
     pub order_id: Option<String>,
+    /// Caller-assigned `ClientOrderId` (monotonic u64 as string). Set before
+    /// placement so incoming `Trade`/`OrderUpdate` events can be correlated
+    /// back to the level without waiting for an exchange `order_id`.
+    pub client_id: Option<String>,
     pub status: GridLevelStatus,
 }
 
@@ -32,6 +36,8 @@ pub struct GridState {
     pub net_position: Decimal,
     pub realized_pnl: Decimal,
     pub total_fills: u64,
+    /// Monotonic counter for `ClientOrderId` assignment; never reused.
+    next_client_id: u64,
 }
 
 impl GridState {
@@ -42,7 +48,15 @@ impl GridState {
             net_position: Decimal::ZERO,
             realized_pnl: Decimal::ZERO,
             total_fills: 0,
+            next_client_id: 1,
         }
+    }
+
+    /// Issue a fresh `ClientOrderId` as a decimal-encoded string.
+    pub fn issue_client_id(&mut self) -> String {
+        let id = self.next_client_id;
+        self.next_client_id += 1;
+        id.to_string()
     }
 
     /// Compute grid levels centered on `mid_price`.
@@ -72,12 +86,14 @@ impl GridState {
                 side: Side::Buy,
                 price: buy_price,
                 order_id: None,
+                client_id: None,
                 status: GridLevelStatus::Pending,
             });
             self.levels.push(GridLevel {
                 side: Side::Sell,
                 price: sell_price,
                 order_id: None,
+                client_id: None,
                 status: GridLevelStatus::Pending,
             });
         }
@@ -109,9 +125,19 @@ impl GridState {
         self.total_fills += 1;
     }
 
-    /// Find a grid level by order ID and mark it as filled.
-    pub fn mark_filled(&mut self, order_id: &str) -> Option<GridLevel> {
-        let level = self.levels.iter_mut().find(|l| l.order_id.as_deref() == Some(order_id))?;
+    /// Find a grid level by client_id or exchange order_id and mark it as
+    /// filled. `client_id` is checked first because we can always assign one
+    /// before placement, whereas `order_id` depends on a later `OrderUpdate`
+    /// event.
+    pub fn mark_filled(
+        &mut self,
+        client_id: Option<&str>,
+        order_id: &str,
+    ) -> Option<GridLevel> {
+        let level = self.levels.iter_mut().find(|l| match client_id {
+            Some(cid) => l.client_id.as_deref() == Some(cid),
+            None => l.order_id.as_deref() == Some(order_id),
+        })?;
         level.status = GridLevelStatus::Filled;
         let filled = level.clone();
         Some(filled)
@@ -139,6 +165,7 @@ impl GridState {
     pub fn reset_levels(&mut self) {
         for level in &mut self.levels {
             level.order_id = None;
+            level.client_id = None;
             level.status = GridLevelStatus::Pending;
         }
     }

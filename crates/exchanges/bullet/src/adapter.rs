@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,11 +8,17 @@ use bb_core::exchange::Exchange;
 use bb_core::types::*;
 use bullet_rust_sdk::ws::models::ServerMessage;
 use bullet_rust_sdk::{
-    CancelOrderArgs, Client, Keypair, ManagedWebsocket, MarketId, Network, NewOrderArgs, OrderId,
-    OrderType as BulletOrderType, OrderbookDepth, PositiveDecimal, Side as BulletSide, Topic,
-    UserActionDiscriminants, WsEvent,
+    CancelOrderArgs, Client, ClientOrderId, Keypair, ManagedWebsocket, MarketId, Network,
+    NewOrderArgs, OrderId, OrderType as BulletOrderType, OrderbookDepth, PositiveDecimal,
+    Side as BulletSide, Topic, UserActionDiscriminants, WsEvent,
 };
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
+
+#[derive(Debug, Clone, Copy)]
+struct Increments {
+    tick_size: Decimal,
+    step_size: Decimal,
+}
 
 use crate::config::BulletConfig;
 use crate::convert;
@@ -24,11 +32,12 @@ pub struct BulletExchange {
     config: BulletConfig,
     client: Option<Arc<Client>>,
     ws: Option<ManagedWebsocket>,
+    increments: HashMap<String, Increments>,
 }
 
 impl BulletExchange {
     pub fn new(config: BulletConfig) -> Self {
-        Self { config, client: None, ws: None }
+        Self { config, client: None, ws: None, increments: HashMap::new() }
     }
 
     fn client(&self) -> Result<&Client, BotError> {
@@ -39,6 +48,14 @@ impl BulletExchange {
         self.client()?
             .market_id(symbol)
             .ok_or_else(|| BotError::config(format!("Unknown symbol: {symbol}")))
+    }
+
+    /// Snap `value` to the nearest multiple of `increment` using `strategy`.
+    fn snap(value: Decimal, increment: Decimal, strategy: RoundingStrategy) -> Decimal {
+        if increment.is_zero() {
+            return value;
+        }
+        (value / increment).round_dp_with_strategy(0, strategy) * increment
     }
 }
 
@@ -71,6 +88,30 @@ impl Exchange for BulletExchange {
             .map_err(|e| BotError::exchange(e, true))?;
 
         let address = client.address().map_err(|e| BotError::exchange(e, false))?;
+
+        // Cache tick_size / step_size per symbol from exchangeInfo filters.
+        // SymbolInfo exposes only precision (max decimals); actual lot/tick
+        // increments live in the PRICE_FILTER / LOT_SIZE filter entries.
+        let info = client.exchange_info().await.map_err(|e| BotError::exchange(e, true))?;
+        for sym in &info.into_inner().symbols {
+            let mut tick = None;
+            let mut step = None;
+            for f in &sym.filters {
+                let Some(kind) = f.get("filterType").and_then(|v| v.as_str()) else { continue };
+                match kind {
+                    "PRICE_FILTER" => {
+                        tick = f.get("tickSize").and_then(|v| v.as_str()).and_then(|s| Decimal::from_str(s).ok());
+                    }
+                    "LOT_SIZE" => {
+                        step = f.get("stepSize").and_then(|v| v.as_str()).and_then(|s| Decimal::from_str(s).ok());
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(tick_size), Some(step_size)) = (tick, step) {
+                self.increments.insert(sym.symbol.clone(), Increments { tick_size, step_size });
+            }
+        }
 
         tracing::info!(
             symbols = client.symbols().len(),
@@ -166,14 +207,27 @@ impl Exchange for BulletExchange {
         }
 
         let client = self.client()?;
-        let market_id = self.market_id(&orders[0].symbol)?;
+        let symbol = &orders[0].symbol;
+        let market_id = self.market_id(symbol)?;
+        let incr = *self
+            .increments
+            .get(symbol)
+            .ok_or_else(|| BotError::config(format!("No tick/step cached for {symbol}")))?;
 
         let sdk_orders: Vec<NewOrderArgs> = orders
             .iter()
             .map(|o| -> Result<NewOrderArgs, BotError> {
-                let price = PositiveDecimal::try_from(o.price)
+                // Snap price toward the book (buy down, sell up) to avoid
+                // crossing from a rounding step, and snap qty down to step_size.
+                let price_strategy = match o.side {
+                    Side::Buy => RoundingStrategy::ToZero,
+                    Side::Sell => RoundingStrategy::AwayFromZero,
+                };
+                let snapped_price = Self::snap(o.price, incr.tick_size, price_strategy);
+                let snapped_qty = Self::snap(o.quantity, incr.step_size, RoundingStrategy::ToZero);
+                let price = PositiveDecimal::try_from(snapped_price)
                     .map_err(|e| BotError::strategy(format!("Invalid price: {e}")))?;
-                let size = PositiveDecimal::try_from(o.quantity)
+                let size = PositiveDecimal::try_from(snapped_qty)
                     .map_err(|e| BotError::strategy(format!("Invalid quantity: {e}")))?;
                 let side = match o.side {
                     Side::Buy => BulletSide::Bid,
@@ -185,13 +239,28 @@ impl Exchange for BulletExchange {
                     OrderType::Market => BulletOrderType::ImmediateOrCancel,
                 };
 
+                // Map caller-supplied NewOrder.client_id (String) to the
+                // on-chain ClientOrderId(u64). We parse rather than hash so
+                // the strategy keeps full control over the namespace.
+                let client_order_id = o
+                    .client_id
+                    .as_deref()
+                    .map(|s| {
+                        s.parse::<u64>().map(ClientOrderId).map_err(|e| {
+                            BotError::strategy(format!(
+                                "client_id '{s}' must be a u64 for Bullet: {e}"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+
                 Ok(NewOrderArgs {
                     price,
                     size,
                     side,
                     order_type,
                     reduce_only: o.reduce_only,
-                    client_order_id: None,
+                    client_order_id,
                     pending_tpsl_pair: None,
                 })
             })
@@ -274,9 +343,13 @@ impl Exchange for BulletExchange {
 
     async fn subscribe(&mut self, symbol: &str) -> Result<(), BotError> {
         let client = self.client.as_ref().ok_or_else(|| BotError::not_connected("bullet"))?;
+        let address = client.address().map_err(|e| BotError::exchange(e, false))?;
 
-        let mut ws =
-            client.connect_ws_managed().call().await.map_err(|e| BotError::exchange(e, true))?;
+        let ws = client
+            .connect_ws_managed()
+            .call()
+            .await
+            .map_err(|e| BotError::exchange(e, true))?;
 
         ws.subscribe(
             [
@@ -289,7 +362,16 @@ impl Exchange for BulletExchange {
         )
         .map_err(|e| BotError::exchange(e, false))?;
 
-        tracing::info!(symbol, "Bullet: subscribed to market data");
+        // User-order lifecycle stream. Bullet uses an address-prefixed topic
+        // (no listenKey / auth handshake — the address itself is the filter).
+        // Topic enum doesn't model this yet, so submit as a raw string.
+        // Docs: https://tradingapi.bullet.xyz/docs/ws/index.html#orderupdate
+        // `{addr}@ORDER_TRADE_UPDATE` is also accepted as a Binance alias.
+        let user_topic = format!("{address}@user.orders");
+        ws.subscribe_raw([user_topic.clone()], None)
+            .map_err(|e| BotError::exchange(e, false))?;
+
+        tracing::info!(symbol, user_topic, "Bullet: subscribed to market + user-order data");
         self.ws = Some(ws);
         Ok(())
     }
@@ -297,28 +379,50 @@ impl Exchange for BulletExchange {
     async fn recv_event(&mut self) -> Option<ExchangeEvent> {
         let ws = self.ws.as_mut()?;
 
-        match ws.recv().await? {
-            WsEvent::Message(msg) => match *msg {
-                ServerMessage::DepthUpdate(ref depth) => Some(convert::depth_to_event(depth)),
-                ServerMessage::BookTicker(ref bt) => Some(convert::book_ticker_to_event(bt)),
-                ServerMessage::MarkPrice(ref mp) => Some(convert::mark_price_to_event(mp)),
-                ServerMessage::AggTrade(ref trade) => {
-                    let addr =
-                        self.client.as_ref().and_then(|c| c.address().ok()).unwrap_or_default();
-                    convert::agg_trade_to_event(trade, &addr)
+        // `None` from `recv_event` tells the engine the stream is dead. So
+        // loop past non-terminal events (subscribe acks, pongs, heartbeats,
+        // reconnecting notices) until we get something the engine should see.
+        loop {
+            let Some(ws_event) = ws.recv().await else {
+                tracing::warn!("Bullet: managed WS recv returned None, stream ended");
+                return None;
+            };
+            match ws_event {
+                WsEvent::Message(msg) => match *msg {
+                    ServerMessage::DepthUpdate(ref depth) => {
+                        return Some(convert::depth_to_event(depth));
+                    }
+                    ServerMessage::BookTicker(ref bt) => {
+                        return Some(convert::book_ticker_to_event(bt));
+                    }
+                    ServerMessage::MarkPrice(ref mp) => {
+                        return Some(convert::mark_price_to_event(mp));
+                    }
+                    ServerMessage::AggTrade(_) => {
+                        // Public-trade stream. Own-fill accounting is driven
+                        // by `ServerMessage::OrderUpdate` (authoritative
+                        // user-order lifecycle stream), so we no longer
+                        // convert AggTrade into `ExchangeEvent::Trade` — that
+                        // was a pre-OrderUpdate fallback that double-counted
+                        // fills once OrderUpdate started working.
+                    }
+                    ServerMessage::OrderUpdate(ref update) => {
+                        return Some(convert::order_update_to_event(update));
+                    }
+                    // Subscribe/unsubscribe acks, pongs, unknown types — not
+                    // surfaced to the strategy, but the stream is still alive.
+                    _ => continue,
+                },
+                WsEvent::Reconnecting => {
+                    tracing::info!("Bullet: WebSocket reconnecting (managed)");
+                    continue;
                 }
-                ServerMessage::OrderUpdate(ref update) => {
-                    Some(convert::order_update_to_event(update))
+                WsEvent::Disconnected(reason) => {
+                    tracing::error!(%reason, "Bullet: permanently disconnected");
+                    return Some(ExchangeEvent::Disconnected {
+                        exchange: "bullet".to_string(),
+                    });
                 }
-                _ => None,
-            },
-            WsEvent::Reconnecting => {
-                tracing::info!("Bullet: WebSocket reconnecting (managed)");
-                None
-            }
-            WsEvent::Disconnected(reason) => {
-                tracing::error!(%reason, "Bullet: permanently disconnected");
-                Some(ExchangeEvent::Disconnected { exchange: "bullet".to_string() })
             }
         }
     }

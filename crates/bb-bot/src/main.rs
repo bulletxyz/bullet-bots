@@ -5,6 +5,11 @@ use bb_core::engine::Engine;
 use bb_core::exchange::Exchange;
 use bb_core::strategy::Strategy;
 use bb_exchange_bullet::{BulletConfig, BulletExchange};
+use bullet_rust_sdk::types::bullet_exchange_interface;
+use bullet_rust_sdk::{
+    CallMessage, Client, Keypair, Network, PositiveDecimal, Transaction, UserAction,
+};
+use rust_decimal::Decimal;
 use bb_exchange_hyperliquid::{HyperliquidConfig, HyperliquidExchange};
 use bb_strategy_grid::{GridConfig, GridStrategy};
 use bb_strategy_funding_arb::{FundingArbConfig, FundingArbStrategy};
@@ -32,6 +37,26 @@ enum Command {
         /// Path to the TOML config file.
         #[arg(short, long)]
         config: String,
+    },
+    /// Generate a burner Ed25519 keypair for Bullet (prints hex secret + base58 address).
+    Keygen {
+        /// Network to print a faucet command for ("testnet" or "mainnet").
+        #[arg(long, default_value = "testnet")]
+        network: String,
+    },
+    /// Deposit funds from on-chain balance into the perp margin account.
+    ///
+    /// Reads `BB_BULLET_PRIVATE_KEY_HEX` from env. Required after funding a fresh
+    /// address via the faucet — `account_info` returns 404 until the first deposit.
+    Deposit {
+        #[arg(long, default_value = "testnet")]
+        network: String,
+        /// Asset symbol (e.g. "USDC", "SOL"). Looked up via /fapi/v1/exchangeInfo.
+        #[arg(long)]
+        asset: String,
+        /// Human-readable amount (e.g. "1000" for 1000 USDC). Scaled by on-chain decimals.
+        #[arg(long)]
+        amount: Decimal,
     },
 }
 
@@ -163,6 +188,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Keygen { network } => {
+            let kp = Keypair::generate();
+            let hex = kp.to_hex();
+            let address = kp.address();
+            let faucet_host = match network.as_str() {
+                "mainnet" => {
+                    return Err("Faucet is only available on testnet".into());
+                }
+                _ => "app.testnet.bullet.xyz",
+            };
+            println!("Bullet {network} burner keypair");
+            println!("  private_key_hex: 0x{hex}");
+            println!("  address:         {address}");
+            println!();
+            println!("Export for bb-bot:");
+            println!("  export BB_BULLET_PRIVATE_KEY_HEX=\"0x{hex}\"");
+            println!();
+            println!("Fund via faucet:");
+            println!(
+                "  curl -X POST \"https://{faucet_host}/api/testnet/faucet?address={address}\""
+            );
+            Ok(())
+        }
+        Command::Deposit { network, asset, amount } => {
+            let hex = std::env::var("BB_BULLET_PRIVATE_KEY_HEX")
+                .map_err(|_| "BB_BULLET_PRIVATE_KEY_HEX is not set")?;
+            let keypair = Keypair::from_hex(&hex)?;
+            let address = keypair.address();
+            let client = Client::builder()
+                .network(Network::from(network.as_str()))
+                .keypair(keypair)
+                .build()
+                .await?;
+
+            let info = client.exchange_info().await?.into_inner();
+            let asset_entry = info
+                .assets
+                .iter()
+                .find(|a| a.asset.eq_ignore_ascii_case(&asset))
+                .ok_or_else(|| format!("Unknown asset '{asset}' — not in exchangeInfo"))?;
+
+            let asset_id =
+                bullet_exchange_interface::types::AssetId(u16::try_from(asset_entry.asset_id)?);
+            let positive = PositiveDecimal::try_from(amount)
+                .map_err(|e| format!("Invalid deposit amount: {e}"))?;
+
+            println!(
+                "Depositing {amount} {asset} (asset_id={}) from {address}",
+                asset_entry.asset_id
+            );
+
+            let call_msg = CallMessage::User(UserAction::Deposit { asset_id, amount: positive });
+            let signed = Transaction::builder().call_message(call_msg).client(&client).build()?;
+            let resp = client.send_transaction(&signed).await?;
+            println!("Deposit submitted. tx_id={}", resp.id);
+            Ok(())
+        }
         Command::Validate { config: path } => {
             let config = load_config(&path)?;
             let exchanges = build_exchanges(config.exchanges)?;

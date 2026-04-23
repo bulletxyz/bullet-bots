@@ -165,6 +165,7 @@ pub enum ExchangeEvent {
         exchange: String,
         symbol: String,
         order_id: String,
+        client_id: Option<String>,
         side: Side,
         price: Decimal,
         quantity: Decimal,

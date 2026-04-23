@@ -1,34 +1,25 @@
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use bb_core::types::{ExchangeEvent, Order, OrderBook, OrderStatus, OrderType, Side};
 use bullet_rust_sdk::types::{
     AggTradeMessage, BookTickerMessage, DepthUpdate, MarkPriceMessage, OrderUpdateData,
-    OrderUpdateMessage,
+    OrderUpdateMessage, PriceLevel,
 };
-use bullet_rust_sdk::{AggTradeExt, BookTickerExt, MarkPriceExt, ParseDecimal, parse_levels};
 use rust_decimal::Decimal;
+
+fn parse_level(level: &PriceLevel) -> Option<(Decimal, Decimal)> {
+    let price = Decimal::from_str(&level.0).ok()?;
+    let qty = Decimal::from_str(&level.1).ok()?;
+    Some((price, qty))
+}
 
 const EXCHANGE_NAME: &str = "bullet";
 
 /// Convert a `DepthUpdate` WS message to an `ExchangeEvent::BookUpdate`.
 pub fn depth_to_event(depth: &DepthUpdate) -> ExchangeEvent {
-    let bids = depth
-        .bids
-        .iter()
-        .filter_map(|level| {
-            let (price, qty) = level.parse_decimal().ok()?;
-            Some((price, qty))
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    let asks = depth
-        .asks
-        .iter()
-        .filter_map(|level| {
-            let (price, qty) = level.parse_decimal().ok()?;
-            Some((price, qty))
-        })
-        .collect::<BTreeMap<_, _>>();
+    let bids = depth.bids.iter().filter_map(parse_level).collect::<BTreeMap<_, _>>();
+    let asks = depth.asks.iter().filter_map(parse_level).collect::<BTreeMap<_, _>>();
 
     ExchangeEvent::BookUpdate {
         exchange: EXCHANGE_NAME.to_string(),
@@ -42,10 +33,14 @@ pub fn book_ticker_to_event(bt: &BookTickerMessage) -> ExchangeEvent {
     let mut bids = BTreeMap::new();
     let mut asks = BTreeMap::new();
 
-    if let Ok((price, qty)) = bt.best_bid() {
+    if let (Ok(price), Ok(qty)) =
+        (Decimal::from_str(&bt.best_bid_price), Decimal::from_str(&bt.best_bid_qty))
+    {
         bids.insert(price, qty);
     }
-    if let Ok((price, qty)) = bt.best_ask() {
+    if let (Ok(price), Ok(qty)) =
+        (Decimal::from_str(&bt.best_ask_price), Decimal::from_str(&bt.best_ask_qty))
+    {
         asks.insert(price, qty);
     }
 
@@ -61,8 +56,8 @@ pub fn mark_price_to_event(mp: &MarkPriceMessage) -> ExchangeEvent {
     ExchangeEvent::MarkPrice {
         exchange: EXCHANGE_NAME.to_string(),
         symbol: mp.symbol.clone(),
-        mark_price: mp.parsed_mark_price().unwrap_or_default(),
-        funding_rate: mp.parsed_funding_rate().unwrap_or_default(),
+        mark_price: Decimal::from_str(&mp.mark_price).unwrap_or_default(),
+        funding_rate: Decimal::from_str(&mp.funding_rate).unwrap_or_default(),
     }
 }
 
@@ -79,9 +74,10 @@ pub fn agg_trade_to_event(trade: &AggTradeMessage, account_address: &str) -> Opt
         exchange: EXCHANGE_NAME.to_string(),
         symbol: trade.symbol.clone(),
         order_id: trade.order_id.to_string(),
+        client_id: trade.client_order_id.as_ref().map(|c| c.to_string()),
         side,
-        price: trade.parsed_price().unwrap_or_default(),
-        quantity: trade.parsed_quantity().unwrap_or_default(),
+        price: Decimal::from_str(&trade.price).unwrap_or_default(),
+        quantity: Decimal::from_str(&trade.quantity).unwrap_or_default(),
         is_maker: trade.is_buyer_maker,
     })
 }
@@ -96,8 +92,11 @@ pub fn order_update_to_event(msg: &OrderUpdateMessage) -> ExchangeEvent {
                 data.common.client_order_id.as_ref().map(|c| c.to_string()),
                 data.common.status.clone(),
                 data.side.clone(),
-                data.price.as_deref().and_then(|p| p.parse().ok()).unwrap_or_default(),
-                data.quantity.as_deref().and_then(|q| q.parse().ok()).unwrap_or_default(),
+                // On a TRADE fill, `data.price` / `data.quantity` are the
+                // order's limit price / size (often omitted). The actual
+                // execution price/size live in the `l` / `L` fields.
+                data.last_filled_price.parse().unwrap_or_default(),
+                data.last_filled_qty.parse().unwrap_or_default(),
                 data.last_filled_qty.parse().unwrap_or_default(),
             ),
             OrderUpdateData::PlaceOrder(data) => (
@@ -154,5 +153,11 @@ pub fn order_update_to_event(msg: &OrderUpdateMessage) -> ExchangeEvent {
 
 /// Parse a REST orderbook (`Vec<Vec<String>>`) into a `BTreeMap<Decimal, Decimal>`.
 pub fn parse_orderbook_levels(raw: &[Vec<String>]) -> BTreeMap<Decimal, Decimal> {
-    parse_levels(raw).unwrap_or_default().into_iter().map(|l| (l.price, l.qty)).collect()
+    raw.iter()
+        .filter_map(|lvl| {
+            let price = Decimal::from_str(lvl.first()?).ok()?;
+            let qty = Decimal::from_str(lvl.get(1)?).ok()?;
+            Some((price, qty))
+        })
+        .collect()
 }

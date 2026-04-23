@@ -110,6 +110,7 @@ pub fn fill_to_event(fill: &TradeInfo) -> ExchangeEvent {
         exchange: EXCHANGE_NAME.to_string(),
         symbol: to_bb_symbol(&fill.coin),
         order_id: fill.oid.to_string(),
+        client_id: fill.cloid.as_ref().map(|c| c.to_string()),
         side,
         price: parse_dec(&fill.px),
         quantity: parse_dec(&fill.sz),

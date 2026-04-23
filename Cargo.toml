@@ -45,7 +45,10 @@ ethers = "2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
-missing_debug_implementations = "warn"
+# `missing_debug_implementations` fights trait-object-heavy designs (Engine,
+# StrategyContext, Box<dyn Exchange/Strategy>) where deriving Debug isn't free.
+# Leave off by default; individual structs can opt in.
+missing_debug_implementations = "allow"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
