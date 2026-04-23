@@ -34,6 +34,7 @@ bb-exchange-bullet = { path = "crates/exchanges/bullet" }
 bb-exchange-hyperliquid = { path = "crates/exchanges/hyperliquid" }
 bb-strategy-grid = { path = "crates/strategies/grid" }
 bb-strategy-funding-arb = { path = "crates/strategies/funding-arb" }
+bb-strategy-avellaneda-stoikov = { path = "crates/strategies/avellaneda-stoikov" }
 
 # Bullet SDK
 # For release: bullet-rust-sdk = { git = "https://github.com/bulletxyz/bullet-rust-sdk.git", rev = "..." }

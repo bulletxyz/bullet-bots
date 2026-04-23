@@ -1,0 +1,60 @@
+# Avellaneda-Stoikov market-making bot example config for Bullet testnet.
+# Run with: cargo run --bin bb-bot -- run --config config/avellaneda-stoikov-example.toml
+
+[engine]
+symbol = "BTC-USD"
+tick_interval_ms = 2000
+reconnect_max_delay_ms = 60000
+status_port = 3030
+
+[exchanges.bullet]
+type = "bullet"
+network = "testnet"
+# Set via environment: export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+private_key_hex = ""
+
+[strategy]
+type = "avellaneda-stoikov"
+
+[strategy.avellaneda-stoikov]
+# Quote size and inventory cap (used to normalize the A-S skew term and as a
+# hard backstop).
+order_size = "0.001"
+max_position = "0.01"
+inventory_target = "0"
+
+# Core A-S parameters. γ = risk aversion, κ = order-flow intensity, τ = horizon.
+# Start conservative and tune: higher γ → more skew, higher κ → tighter base
+# spread. τ scales the inventory-skew contribution.
+gamma = "0.5"
+kappa = "1.5"
+order_horizon_secs = 60
+
+# Rolling-window volatility estimator (log-return stddev).
+vol_window_secs = 600
+
+# Re-quote cadence.
+order_refresh_secs = 10
+
+# Half-spread floor/ceiling in bps of mid. The floor should always beat
+# round-trip maker fees (see [fees]); the ceiling caps runaway A-S in vol spikes.
+min_half_spread_bps = "10"
+max_half_spread_bps = "500"
+
+# Multi-level ladder. Level 0 sits at the A-S inner quote; each outer level
+# steps out by `order_level_spread_bps` of mid from the inner half-spread.
+# `order_level_amount_step` adds (i × step) × order_size to each outer level —
+# 0 means flat size across levels.
+order_levels = 3
+order_level_spread_bps = "10"
+order_level_amount_step = "0"
+
+order_type = "PostOnly"
+
+[strategy.avellaneda-stoikov.fees]
+maker_bps = "1.0"
+taker_bps = "5.0"
+min_spread_fee_multiplier = "3.0"
+
+[logging]
+level = "info"

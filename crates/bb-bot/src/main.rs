@@ -13,6 +13,7 @@ use rust_decimal::Decimal;
 use bb_exchange_hyperliquid::{HyperliquidConfig, HyperliquidExchange};
 use bb_strategy_grid::{GridConfig, GridStrategy};
 use bb_strategy_funding_arb::{FundingArbConfig, FundingArbStrategy};
+use bb_strategy_avellaneda_stoikov::{AvellanedaStoikovConfig, AvellanedaStoikovStrategy};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
@@ -178,6 +179,15 @@ fn build_strategy(
                 .try_into()
                 .map_err(|e: toml::de::Error| format!("Invalid funding-arb config: {e}"))?;
             Ok(Box::new(FundingArbStrategy::new(config)))
+        }
+        "avellaneda-stoikov" => {
+            let config: AvellanedaStoikovConfig = sub_config
+                .try_into()
+                .map_err(|e: toml::de::Error| format!("Invalid avellaneda-stoikov config: {e}"))?;
+            Ok(Box::new(AvellanedaStoikovStrategy::new(
+                config,
+                primary_exchange.to_string(),
+            )))
         }
         other => Err(format!("Unknown strategy type: {other}").into()),
     }
