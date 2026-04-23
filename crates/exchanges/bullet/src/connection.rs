@@ -50,7 +50,7 @@ pub async fn connect(
     config: &BulletConfig,
     symbol: &str,
 ) -> Result<(BulletBroker, BulletFeeds), BotError> {
-    let keypair = Keypair::from_hex(&config.private_key_hex)
+    let keypair = Keypair::from_hex(secrecy::ExposeSecret::expose_secret(&config.private_key_hex))
         .map_err(|e| BotError::config(format!("Invalid private key: {e}")))?;
     let network = match config.network.as_str() {
         "mainnet" => Network::Mainnet,

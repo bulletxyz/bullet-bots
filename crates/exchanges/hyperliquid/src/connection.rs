@@ -46,8 +46,8 @@ pub async fn connect(
     config: &HyperliquidConfig,
     symbol: &str,
 ) -> Result<(HyperliquidBroker, HyperliquidFeeds), BotError> {
-    let key_hex =
-        config.private_key_hex.strip_prefix("0x").unwrap_or(&config.private_key_hex);
+    let raw_key = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
+    let key_hex = raw_key.strip_prefix("0x").unwrap_or(raw_key.as_str());
     let wallet: LocalWallet = key_hex
         .parse()
         .map_err(|e| BotError::config(format!("Invalid HL private key: {e}")))?;

@@ -24,6 +24,7 @@ serde_json = "1"
 toml = "0.8"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 thiserror = "2"
+secrecy = { version = "0.8", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
