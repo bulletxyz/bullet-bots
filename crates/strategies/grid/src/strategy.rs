@@ -22,7 +22,7 @@ use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
 use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
-use bb_core::types::{CancelOrder, NewOrder, OrderBook, OrderStatus, Side};
+use bb_core::types::{CancelOrder, NewOrder, OrderBook, OrderStatus, OrderType, Side};
 use rust_decimal::Decimal;
 
 use crate::config::{GridConfig, SpacingMode};
@@ -113,6 +113,13 @@ impl GridActor {
     }
 
     /// Place every `Pending` level, skipping sides at max position.
+    ///
+    /// PostOnly levels that would cross the cached top of book are also
+    /// skipped — under tight spacing the market can drift enough between
+    /// rebalances to put inner levels across the book, and every such
+    /// submission would be rejected by the venue as in-cross. Skipped
+    /// levels remain `Pending`; the next tick retries them (by which time
+    /// either the book has moved or rebalance has re-centered the grid).
     async fn place_pending_orders(&mut self, cx: &ActorContext) -> Result<(), BotError> {
         let broker = self.broker(cx)?;
         let order_type = self.config.order_type;
@@ -122,6 +129,7 @@ impl GridActor {
 
         let mut orders: Vec<NewOrder> = Vec::new();
         let mut target_cids: Vec<String> = Vec::new();
+        let mut skipped_crossed = 0usize;
         for idx in 0..self.state.levels.len() {
             let (level_side, level_price) = {
                 let level = &self.state.levels[idx];
@@ -133,6 +141,17 @@ impl GridActor {
                 }
                 (level.side, level.price)
             };
+
+            if order_type == OrderType::PostOnly
+                && self
+                    .book
+                    .as_ref()
+                    .is_some_and(|b| b.would_cross(level_side, level_price))
+            {
+                skipped_crossed += 1;
+                continue;
+            }
+
             let cid = self.client_ids.issue();
             self.state.levels[idx].client_id = Some(cid.clone());
             orders.push(NewOrder {
@@ -145,6 +164,15 @@ impl GridActor {
                 reduce_only: false,
             });
             target_cids.push(cid);
+        }
+
+        if skipped_crossed > 0 {
+            tracing::warn!(
+                skipped = skipped_crossed,
+                best_bid = ?self.book.as_ref().and_then(|b| b.best_bid()).map(|l| l.price.to_string()),
+                best_ask = ?self.book.as_ref().and_then(|b| b.best_ask()).map(|l| l.price.to_string()),
+                "Skipping PostOnly levels that would cross book — consider rebalance_threshold_pct ≤ grid_spacing"
+            );
         }
 
         if orders.is_empty() {
