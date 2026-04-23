@@ -199,7 +199,7 @@ crates/
                       to ActiveAssetCtx so `MarkPriceUpdate.funding_rate` is
                       real (not hardcoded zero)
   strategies/
-    grid/                Grid trading — actor
+    grid/                Static grid — fixed-range, anchor-biased
     avellaneda-stoikov/  A-S market maker — actor
     funding-arb/         Cross-venue funding arb — actor
 config/

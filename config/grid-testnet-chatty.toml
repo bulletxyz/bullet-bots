@@ -1,13 +1,7 @@
-# Grid config tuned to generate visible fills on Bullet testnet.
+# Static grid tuned to generate visible fills on Bullet testnet.
 #
-# Rationale:
-#  - spacing 0.05% (~$40 per level at $78k BTC) puts level 1 just outside the
-#    spread. Small market moves cross it → maker fills.
-#  - 10 levels per side = 20 resting orders; something is almost always at risk.
-#  - Fast rebalance (0.15%) re-centers the grid quickly when the tape drifts,
-#    so idle orders don't sit stale for hours.
-#  - Small per-order size (0.0001 BTC, the LOT_SIZE minimum) means many fills
-#    before `max_position` pauses one side.
+# Tight range (~1% total) around a moving market gives a lot of oscillations
+# through inner levels. Small order size so a handful of fills is cheap.
 
 [engine]
 tick_interval_ms = 2000
@@ -23,13 +17,12 @@ type = "grid"
 
 [strategy.grid]
 symbol = "BTC-USD"
-num_levels = 10
-spacing_mode = "geometric"
-grid_spacing = "0.05"         # 0.05% → ~$40/level at $78k BTC
-order_size = "0.0001"         # step_size minimum for BTC-USD
+lower_price = "77000"
+upper_price = "78000"
+num_levels = 21                 # spacing = $50 (~0.065%)
+order_size = "0.0001"           # BTC step_size minimum
 order_type = "post_only"
-max_position = "0.005"
-rebalance_threshold_pct = "0.05"  # = grid_spacing (see GridConfig docs)
+max_position = "0.002"          # 20 levels' worth of one-sided fills
 
 [logging]
 level = "info"

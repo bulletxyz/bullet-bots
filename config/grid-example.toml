@@ -1,5 +1,14 @@
-# Grid trading bot example config for Bullet testnet.
+# Static grid bot example config for Bullet testnet.
 # Run with: cargo run --bin bb-bot -- run --config config/grid-example.toml
+#
+# Static grid: N uniformly-spaced levels across [lower_price, upper_price].
+# Levels are placed once at startup and NEVER moved. Price leaving the range
+# = grid goes idle until price returns.
+#
+# Bias is expressed by `anchor_price` inside the range:
+#   - anchor near `lower_price` → more sell levels → short bias
+#   - anchor near `upper_price` → more buy levels → long bias
+#   - omit `anchor_price` → use current mid at startup (neutral)
 
 [engine]
 tick_interval_ms = 5000
@@ -16,29 +25,25 @@ type = "grid"
 
 [strategy.grid]
 symbol = "BTC-USD"
-num_levels = 5
-spacing_mode = "geometric"
-grid_spacing = "0.5"
+# Pick a range where you think price will oscillate.
+lower_price = "70000"
+upper_price = "85000"
+num_levels = 31                 # spacing = (upper-lower)/(N-1) = $500/level (~0.65%)
+# anchor_price = "77500"        # explicit — defaults to mid at startup if omitted
 order_size = "0.001"
 order_type = "post_only"
-max_position = "0.01"
-rebalance_threshold_pct = "0.5"   # ≤ grid_spacing — rebalance before level-1 crosses
-# Minimum seconds between rebalances. Suppresses fee churn in whippy markets.
-rebalance_cooldown_secs = 30
-# Inventory skew: widens quotes on the leaned side proportional to net
-# position / max_position. 0 disables (reverts to symmetric grid).
-inventory_skew_k = "0.3"
+max_position = "0.015"          # 15× order_size; caps inventory on strong one-sided moves
 
-# Optional fee-floor guardrail. Refuses to run if spacing can't cover
-# `min_spacing_fee_multiplier` × round-trip maker fees.
+# Fee-floor guardrail: refuses to start if spacing can't cover
+# `min_spacing_fee_multiplier × round-trip maker fees`.
 [strategy.grid.fees]
 maker_bps = "1.0"
 taker_bps = "5.0"
 min_spacing_fee_multiplier = "3.0"
 
-# Optional EMA trend filter. When fast vs slow EMA divergence in basis points
-# exceeds the threshold, all live orders are cancelled and placement pauses
-# until the slope relaxes. Cheapest defence against bleeding in trends.
+# Optional EMA trend filter: pause placement when fast/slow EMA divergence in
+# basis points exceeds the threshold. Useful on a static grid so you stop
+# adding to your bag during strong trends.
 [strategy.grid.trend_filter]
 fast_secs = 300
 slow_secs = 3600

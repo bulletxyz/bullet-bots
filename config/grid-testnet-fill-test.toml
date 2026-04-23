@@ -1,12 +1,6 @@
-# Tight grid designed to actually get filled so we can verify the fill-handling
-# path (Trade event → InventoryTracker update → opposite-side replacement).
-#
-# Geometry at BTC ≈ $78k with 0.02% spacing:
-#   level-1 buy  ≈ $15.6 below mid  → lands on or just below best bid
-#   level-1 sell ≈ $15.6 above mid  → lands on or just below best ask
-#
-# PostOnly so we stay maker (no taker fee leak; the point is to verify our
-# side of the fill pipeline, not to take).
+# Tight static grid designed to actually get filled so we can verify the
+# fill-handling path (Trade event → InventoryTracker update → adjacent
+# re-arm). Adjust `lower_price` / `upper_price` to straddle current mid.
 
 [engine]
 tick_interval_ms = 2000
@@ -22,13 +16,12 @@ type = "grid"
 
 [strategy.grid]
 symbol = "BTC-USD"
-num_levels = 5
-spacing_mode = "geometric"
-grid_spacing = "0.02"
+lower_price = "77200"
+upper_price = "77800"
+num_levels = 13                 # spacing = $50 (~0.065%)
 order_size = "0.0001"
 order_type = "post_only"
-max_position = "0.002"
-rebalance_threshold_pct = "0.02"  # = grid_spacing (see GridConfig docs)
+max_position = "0.001"
 
 [logging]
 level = "info"
