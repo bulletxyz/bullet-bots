@@ -42,7 +42,15 @@ pub struct GridConfig {
     /// Maximum net position before pausing one side.
     pub max_position: Decimal,
 
-    /// Rebalance the grid if mid price moves this far from grid center (percentage).
+    /// Rebalance the grid when mid has drifted this far from grid center (%).
+    ///
+    /// **Rule of thumb:** keep this ≤ `grid_spacing`. If it's larger, the
+    /// market can move by more than one level before rebalance fires, and
+    /// inner levels end up crossing the top of book — the venue will reject
+    /// every PostOnly submission as in-cross until the next rebalance lands.
+    /// `GridActor` tolerates this (it skips crossed levels with a warning)
+    /// but the grid quotes one-sided until the book moves back or the
+    /// threshold trips.
     #[serde(default = "default_rebalance_threshold")]
     pub rebalance_threshold_pct: Decimal,
 

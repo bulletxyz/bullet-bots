@@ -22,7 +22,7 @@ grid_spacing = "0.5"
 order_size = "0.001"
 order_type = "post_only"
 max_position = "0.01"
-rebalance_threshold_pct = "3.0"
+rebalance_threshold_pct = "0.5"   # ≤ grid_spacing — rebalance before level-1 crosses
 # Minimum seconds between rebalances. Suppresses fee churn in whippy markets.
 rebalance_cooldown_secs = 30
 # Inventory skew: widens quotes on the leaned side proportional to net
