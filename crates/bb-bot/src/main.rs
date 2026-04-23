@@ -5,6 +5,7 @@
 //! typed feeds into a `HarnessBuilder`, attach the strategy actor, and run.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,10 +49,14 @@ enum Command {
         #[arg(short, long)]
         config: String,
     },
-    /// Generate a burner Ed25519 keypair for Bullet.
+    /// Generate a burner Ed25519 keypair for Bullet and write it to a
+    /// Solana-compatible JSON keystore file.
     Keygen {
         #[arg(long, default_value = "testnet")]
         network: String,
+        /// Where to write the keystore. Defaults to `$HOME/.config/bullet/id.json`.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Deposit funds from on-chain balance into the perp margin account.
     Deposit {
@@ -107,8 +112,11 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     let mut config: AppConfig = toml::from_str(&content)?;
 
     if let Some(bullet) = config.exchanges.get_mut("bullet") {
-        if let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
-            if let Some(table) = bullet.config.as_table_mut() {
+        if let Some(table) = bullet.config.as_table_mut() {
+            if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
+                table.insert("key_file".to_string(), toml::Value::String(path));
+            }
+            if let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
                 table.insert("private_key_hex".to_string(), toml::Value::String(key));
             }
         }
@@ -356,44 +364,90 @@ fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
 // -- Auxiliary commands (unchanged) -----------------------------------------
 
-async fn keygen(network: String) -> Result<(), Box<dyn std::error::Error>> {
-    // We generate the seed locally and hand it to `Keypair::from_hex` rather
-    // than going through `Keypair::generate` + `to_hex`. The SDK intentionally
-    // does not expose a way to serialize an existing `Keypair` back to hex,
-    // so key material can only flow _into_ the SDK, never back out. This
-    // command is the single, explicit place where a fresh Ed25519 secret is
-    // printed to the user.
-    use rand::RngCore;
+fn keygen(network: String, out: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let faucet_host = match network.as_str() {
         "mainnet" => return Err("Faucet is only available on testnet".into()),
         _ => "app.testnet.bullet.xyz",
     };
 
-    let mut seed = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut seed);
-    let mut hex = String::with_capacity(64);
-    for b in seed {
-        use std::fmt::Write;
-        write!(&mut hex, "{b:02x}").expect("writing to String cannot fail");
+    let path = out.unwrap_or_else(default_key_path);
+    if path.exists() {
+        return Err(format!(
+            "Refusing to overwrite existing keystore at {}. \
+             Use `--out <path>` to write elsewhere, or remove it first.",
+            path.display()
+        )
+        .into());
     }
-    // Scrub the stack-local seed immediately — it is already copied into `hex`
-    // and into the Keypair below.
-    seed.fill(0);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
-    let keypair = Keypair::from_hex(&hex)
-        .map_err(|e| format!("Failed to build keypair from generated seed: {e}"))?;
+    let keypair = Keypair::generate();
     let address = keypair.address();
+    keypair.write_to_file(&path)?;
+    set_keystore_permissions(&path)?;
 
     println!("Bullet {network} burner keypair");
-    println!("  private_key_hex: 0x{hex}");
-    println!("  address:         {address}");
+    println!("  address:  {address}");
+    println!("  key_file: {}", path.display());
     println!();
-    println!("Export for bb-bot:");
-    println!("  export BB_BULLET_PRIVATE_KEY_HEX=\"0x{hex}\"");
+    println!("Configure bb-bot:");
+    println!("  [exchanges.bullet]");
+    println!("  key_file = \"{}\"", path.display());
+    println!("  # or:");
+    println!("  export BB_BULLET_KEY_FILE=\"{}\"", path.display());
     println!();
     println!("Fund via faucet:");
     println!("  curl -X POST \"https://{faucet_host}/api/testnet/faucet?address={address}\"");
     Ok(())
+}
+
+/// `$HOME/.config/bullet/id.json`. Falls back to the current directory if
+/// `HOME` is unset (rare — CI sandboxes, some containers).
+fn default_key_path() -> PathBuf {
+    match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join(".config/bullet/id.json"),
+        None => PathBuf::from("./bullet-id.json"),
+    }
+}
+
+/// Set the keystore file to owner-read/write only (0600). On non-Unix
+/// platforms this is a no-op — Windows ACLs are left to the user's home
+/// directory permissions.
+#[cfg(unix)]
+fn set_keystore_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn set_keystore_permissions(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Resolve a Keypair for standalone (non-harness) commands like `deposit`,
+/// in the same preference order as `BulletConfig`: `BB_BULLET_KEY_FILE` wins,
+/// then `BB_BULLET_PRIVATE_KEY_HEX`, then the default path, else error.
+fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
+    if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
+        return Keypair::read_from_file(&path)
+            .map_err(|e| format!("Failed to load keystore {path}: {e}").into());
+    }
+    if let Ok(hex) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
+        return Keypair::from_hex(&hex).map_err(Into::into);
+    }
+    let default = default_key_path();
+    if default.exists() {
+        return Keypair::read_from_file(&default).map_err(|e| {
+            format!("Failed to load default keystore {}: {e}", default.display()).into()
+        });
+    }
+    Err("No key material — set BB_BULLET_KEY_FILE, BB_BULLET_PRIVATE_KEY_HEX, \
+         or run `bb-bot keygen` to create a default keystore"
+        .into())
 }
 
 async fn deposit(
@@ -401,9 +455,7 @@ async fn deposit(
     asset: String,
     amount: Decimal,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let hex = std::env::var("BB_BULLET_PRIVATE_KEY_HEX")
-        .map_err(|_| "BB_BULLET_PRIVATE_KEY_HEX is not set")?;
-    let keypair = Keypair::from_hex(&hex)?;
+    let keypair = load_deposit_keypair()?;
     let address = keypair.address();
     let client = Client::builder()
         .network(Network::from(network.as_str()))
@@ -438,7 +490,7 @@ async fn deposit(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen { network } => keygen(network).await,
+        Command::Keygen { network, out } => keygen(network, out),
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,
         Command::Validate { config: path } => validate(load_config(&path)?),
         Command::Run { config: path } => {

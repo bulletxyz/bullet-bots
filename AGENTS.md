@@ -31,11 +31,25 @@ Validate a config without connecting:
 cargo run --bin bb-bot -- validate --config config/grid-example.toml
 ```
 
-Run a bot:
+Generate a keypair (first time):
 
 ```sh
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+cargo run --bin bb-bot -- keygen --network testnet
+# → writes ~/.config/bullet/id.json (0600), prints address + faucet curl
+```
+
+Run a bot (default: reads `~/.config/bullet/id.json`):
+
+```sh
 cargo run --bin bb-bot -- run --config config/grid-example.toml
+```
+
+Or point at an explicit keystore / use hex for CI:
+
+```sh
+export BB_BULLET_KEY_FILE="/path/to/keystore.json"   # preferred
+# OR
+export BB_BULLET_PRIVATE_KEY_HEX="0x..."             # fallback
 ```
 
 ## Architecture — the harness, feeds, and actors
@@ -258,8 +272,11 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 `[strategy.<type>]`, `[logging]`.
 
 - `[engine]` — `tick_interval_ms`, `status_port` (optional). `symbol` lives inside each `[strategy.<name>]` section so multi-symbol setups are explicit.
-- Exchange configs: `type = "<name>"` + adapter-specific fields. Private keys
-  via env vars (`BB_BULLET_PRIVATE_KEY_HEX`, `BB_HYPERLIQUID_PRIVATE_KEY_HEX`).
+- Exchange configs: `type = "<name>"` + adapter-specific fields. Bullet
+  resolves key material in this order: `key_file` (in config) → env
+  `BB_BULLET_KEY_FILE` → env `BB_BULLET_PRIVATE_KEY_HEX` → `private_key_hex`
+  (in config). File-based keystore is preferred — see `bb-bot keygen`.
+  Hyperliquid keys via `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style

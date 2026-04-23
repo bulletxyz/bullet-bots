@@ -50,8 +50,21 @@ pub async fn connect(
     config: &BulletConfig,
     symbol: &str,
 ) -> Result<(BulletBroker, BulletFeeds), BotError> {
-    let keypair = Keypair::from_hex(secrecy::ExposeSecret::expose_secret(&config.private_key_hex))
-        .map_err(|e| BotError::config(format!("Invalid private key: {e}")))?;
+    let keypair = if let Some(path) = config.key_file.as_deref() {
+        Keypair::read_from_file(path).map_err(|e| {
+            BotError::config(format!("Failed to load keystore {}: {e}", path.display()))
+        })?
+    } else {
+        let hex = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
+        if hex.is_empty() {
+            return Err(BotError::config(
+                "Bullet: no key material — set [exchanges.bullet].key_file, \
+                 BB_BULLET_KEY_FILE, private_key_hex, or BB_BULLET_PRIVATE_KEY_HEX"
+                    .to_string(),
+            ));
+        }
+        Keypair::from_hex(hex).map_err(|e| BotError::config(format!("Invalid private key: {e}")))?
+    };
     let network = match config.network.as_str() {
         "mainnet" => Network::Mainnet,
         "testnet" => Network::Testnet,
