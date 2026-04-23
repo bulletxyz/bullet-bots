@@ -63,13 +63,6 @@ impl BrokerRegistry {
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(|k| k.as_ref())
     }
-
-    /// Convenience: require a broker by name, returning a typed error if
-    /// missing. Actors use this when they know the exchange name a priori.
-    pub fn require(&self, name: &str) -> Result<&Arc<dyn Broker>, BotError> {
-        self.get(name)
-            .ok_or_else(|| BotError::UnknownExchange(name.to_string()))
-    }
 }
 
 impl std::fmt::Debug for BrokerRegistry {

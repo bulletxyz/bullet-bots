@@ -13,11 +13,9 @@
 //! drift threshold, no inventory skew. The grid's bias is expressed by the
 //! `anchor_price` (or current mid at startup) relative to the range.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use bb_core::broker::Broker;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
@@ -30,7 +28,6 @@ use crate::grid::{GridState, LevelState};
 
 pub struct GridActor {
     config: GridConfig,
-    exchange_name: String,
     state: GridState,
     inventory: InventoryTracker,
     client_ids: ClientIdIssuer,
@@ -41,14 +38,13 @@ pub struct GridActor {
 }
 
 impl GridActor {
-    pub fn new(config: GridConfig, exchange_name: impl Into<String>) -> Self {
+    pub fn new(config: GridConfig) -> Self {
         let state = match &config.trend_filter {
             Some(cfg) => GridState::new().with_trend_filter(cfg),
             None => GridState::new(),
         };
         Self {
             config,
-            exchange_name: exchange_name.into(),
             state,
             inventory: InventoryTracker::new(),
             client_ids: ClientIdIssuer::new(),
@@ -57,13 +53,14 @@ impl GridActor {
         }
     }
 
+    fn exchange(&self) -> &str {
+        &self.config.exchange
+    }
+
     fn symbol(&self) -> &str {
         &self.config.symbol
     }
 
-    fn broker(&self, cx: &ActorContext) -> Result<Arc<dyn Broker>, BotError> {
-        cx.brokers().require(&self.exchange_name).map(Arc::clone)
-    }
 
     /// Refuse to start if the per-level spacing can't cover round-trip
     /// maker fees by the configured multiplier.
@@ -103,7 +100,7 @@ impl GridActor {
     /// Place every `Pending` level, skipping sides at `max_position` or
     /// levels that would cross the cached book under PostOnly.
     async fn place_pending_orders(&mut self, cx: &ActorContext) -> Result<(), BotError> {
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         let order_type = self.config.order_type;
         let order_size = self.config.order_size;
         let max_position = self.config.max_position;
@@ -197,7 +194,7 @@ impl GridActor {
     /// order is not on the exchange (e.g., silently cancelled by a venue
     /// edge case) flips back to `Pending` so we re-place next tick.
     async fn reconcile_missing_orders(&mut self, cx: &ActorContext) -> Result<usize, BotError> {
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         let live = broker.get_open_orders(self.symbol()).await?;
         let live_oids: std::collections::HashSet<&str> =
             live.iter().map(|o| o.id.as_str()).collect();
@@ -240,7 +237,7 @@ impl GridActor {
                 threshold_bps = %cfg.pause_divergence_bps,
                 "Trend filter tripped — suspending grid"
             );
-            let broker = self.broker(cx)?;
+            let broker = cx.broker(self.exchange())?;
             let _ = broker.cancel_all_orders(self.symbol()).await;
             self.state.suspend_all();
         } else if !paused && was_paused {
@@ -257,7 +254,7 @@ impl Actor for GridActor {
         self.config.validate().map_err(BotError::strategy)?;
         self.check_fee_floor()?;
 
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         tracing::info!("Cancelling stale orders");
         broker.cancel_all_orders(self.symbol()).await?;
 
@@ -318,7 +315,7 @@ impl Actor for GridActor {
         _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         tracing::info!("Shutting down grid — cancelling all orders");
         if let Err(e) = broker.cancel_all_orders(self.symbol()).await {
             tracing::warn!(error = %e, "Failed to cancel all on shutdown");
@@ -356,7 +353,7 @@ impl EventHandler<BookUpdate> for GridActor {
         event: BookUpdate,
         _cx: &ActorContext,
     ) -> Result<(), BotError> {
-        if event.exchange == self.exchange_name && event.symbol == self.symbol() {
+        if event.exchange == self.exchange() && event.symbol == self.symbol() {
             self.book = Some(event.orderbook);
         }
         Ok(())
@@ -366,7 +363,7 @@ impl EventHandler<BookUpdate> for GridActor {
 #[async_trait]
 impl EventHandler<Trade> for GridActor {
     async fn on_event(&mut self, event: Trade, cx: &ActorContext) -> Result<(), BotError> {
-        if event.exchange != self.exchange_name || event.symbol != self.symbol() {
+        if event.exchange != self.exchange() || event.symbol != self.symbol() {
             return Ok(());
         }
         self.inventory.record_fill(event.side, event.price, event.quantity);
@@ -427,7 +424,7 @@ impl EventHandler<OrderLifecycle> for GridActor {
         event: OrderLifecycle,
         _cx: &ActorContext,
     ) -> Result<(), BotError> {
-        if event.exchange != self.exchange_name || event.order.symbol != self.symbol() {
+        if event.exchange != self.exchange() || event.order.symbol != self.symbol() {
             return Ok(());
         }
         // Learn exchange order_id once the venue acks our placement.
@@ -503,6 +500,7 @@ mod integration_tests {
     //! without touching the network.
 
     use super::*;
+    use std::sync::Arc;
     use bb_core::broker::Broker;
     use bb_core::events::Trade;
     use bb_core::harness::testing::{NullBroker, ScriptedFeed};
@@ -514,6 +512,7 @@ mod integration_tests {
 
     fn test_config() -> GridConfig {
         GridConfig {
+            exchange: "bullet".into(),
             symbol: "BTC-USD".into(),
             lower_price: d("74"),
             upper_price: d("78"),
@@ -533,7 +532,7 @@ mod integration_tests {
         // Trade matches nothing. The harness should dispatch it and the
         // broker should see no subsequent place/cancel from the Trade path.
         let broker = NullBroker::shared("bullet");
-        let actor = GridActor::new(test_config(), "bullet");
+        let actor = GridActor::new(test_config());
         let feed = ScriptedFeed::new(vec![Trade {
             exchange: "bullet".into(),
             symbol: "BTC-USD".into(),

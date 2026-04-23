@@ -54,7 +54,7 @@ where
         cancel: CancellationToken,
     ) -> JoinHandle<Result<(), BotError>> {
         let tx = EventTx::new(bus.sender::<E>());
-        let ctx = FeedContext::new(self.name.clone(), cancel);
+        let ctx = FeedContext::new(cancel);
         let feed = self.feed.take().expect("feed consumed twice");
         tokio::spawn(async move { feed.run(tx, ctx).await })
     }
@@ -67,7 +67,6 @@ pub(super) trait ActorSpawn: Send {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
-        primary_broker: Arc<str>,
         shutdown: CancellationToken,
     ) -> ActorHandle;
 }
@@ -190,11 +189,9 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
-        primary_broker: Arc<str>,
         shutdown: CancellationToken,
     ) -> ActorHandle {
-        let ctx =
-            Arc::new(ActorContext::new(self.name.clone(), brokers, primary_broker, shutdown));
+        let ctx = Arc::new(ActorContext::new(self.name.clone(), brokers, shutdown));
         let name = self.name.clone();
         let actor = self.actor;
 
@@ -329,7 +326,6 @@ impl HarnessBuilder {
             return Err(BotError::config("HarnessBuilder: no brokers registered"));
         }
         let mut registry = BrokerRegistry::new();
-        let primary = self.brokers[0].0.clone();
         for (name, broker) in self.brokers {
             registry.insert(name, broker)?;
         }
@@ -337,7 +333,6 @@ impl HarnessBuilder {
             self.feeds,
             self.actors,
             Arc::new(registry),
-            primary,
             self.enable_signal,
             self.status_port,
         ))

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::event::Event;
-use crate::broker::BrokerRegistry;
+use crate::broker::{Broker, BrokerRegistry};
 use crate::error::BotError;
 
 /// Shared context available inside `init`, `on_event`, and `wind_down`. Holds
@@ -25,7 +25,6 @@ use crate::error::BotError;
 pub struct ActorContext {
     name: Arc<str>,
     brokers: Arc<BrokerRegistry>,
-    primary_broker: Arc<str>,
     shutdown: tokio_util::sync::CancellationToken,
 }
 
@@ -33,25 +32,29 @@ impl ActorContext {
     pub fn new(
         name: Arc<str>,
         brokers: Arc<BrokerRegistry>,
-        primary_broker: Arc<str>,
         shutdown: tokio_util::sync::CancellationToken,
     ) -> Self {
-        Self { name, brokers, primary_broker, shutdown }
+        Self { name, brokers, shutdown }
     }
 
     pub fn actor_name(&self) -> &str {
         &self.name
     }
 
-    pub fn brokers(&self) -> &BrokerRegistry {
-        &self.brokers
+    /// Look up a broker by name. Returns `Err(UnknownExchange)` if no broker
+    /// is registered under that name — the typed error beats panicking on an
+    /// `unwrap` and gives the actor a useful message for its strategy error.
+    pub fn broker(&self, name: &str) -> Result<Arc<dyn Broker>, BotError> {
+        self.brokers
+            .get(name)
+            .map(Arc::clone)
+            .ok_or_else(|| BotError::UnknownExchange(name.to_string()))
     }
 
-    /// Convenience: the name of the first broker registered on the harness.
-    /// Strategies that target a single exchange use this to avoid hard-coding
-    /// exchange names in their config.
-    pub fn primary_broker(&self) -> &str {
-        &self.primary_broker
+    /// Full registry — for the rare case (e.g. funding-arb) that needs to
+    /// iterate all brokers. Prefer [`broker`] when you know the name.
+    pub fn brokers(&self) -> &BrokerRegistry {
+        &self.brokers
     }
 
     /// Request a graceful shutdown of the entire harness.

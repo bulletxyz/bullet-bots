@@ -6,7 +6,6 @@
 //! cancellation signal. When the shutdown trigger fires, feeds are expected
 //! to observe `cx.cancelled()` and return promptly.
 
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
@@ -41,30 +40,21 @@ impl<E: Event> EventTx<E> {
 #[error("no subscribers for this event type")]
 pub struct NoSubscribers;
 
-/// Context passed to a feed's `run` method. Owns the feed name and the
-/// cooperative cancellation token for graceful shutdown.
+/// Context passed to a feed's `run` method. Just the cooperative
+/// cancellation token — feeds `select!` on `cancelled()` alongside their
+/// read loop to exit promptly on shutdown.
 pub struct FeedContext {
-    name: Arc<str>,
     cancel: CancellationToken,
 }
 
 impl FeedContext {
-    pub fn new(name: Arc<str>, cancel: CancellationToken) -> Self {
-        Self { name, cancel }
+    pub fn new(cancel: CancellationToken) -> Self {
+        Self { cancel }
     }
 
-    pub fn feed_name(&self) -> &str {
-        &self.name
-    }
-
-    /// Resolves once the harness requests shutdown. Feeds that block on I/O
-    /// should select over this alongside their read loop.
+    /// Resolves once the harness requests shutdown.
     pub async fn cancelled(&self) {
         self.cancel.cancelled().await;
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel.is_cancelled()
     }
 }
 

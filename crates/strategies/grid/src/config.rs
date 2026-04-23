@@ -15,6 +15,11 @@ use serde::Deserialize;
 /// equals `spacing × order_size`, where `spacing = (upper - lower) / (num_levels - 1)`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GridConfig {
+    /// Broker to trade against — name matches the one passed to
+    /// `HarnessBuilder::wire_broker` (e.g. `"bullet"`).
+    #[serde(default = "default_exchange")]
+    pub exchange: String,
+
     /// Trading symbol (e.g. `"BTC-USD"`).
     pub symbol: String,
 
@@ -78,6 +83,10 @@ pub struct TrendFilterConfig {
 
 fn default_order_type() -> OrderType {
     OrderType::PostOnly
+}
+
+fn default_exchange() -> String {
+    "bullet".to_string()
 }
 
 fn default_min_spacing_fee_multiplier() -> Decimal {

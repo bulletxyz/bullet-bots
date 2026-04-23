@@ -219,6 +219,7 @@ mod tests {
 
     fn cfg(lower: i64, upper: i64, n: usize) -> GridConfig {
         GridConfig {
+            exchange: "bullet".into(),
             symbol: "BTC-USD".into(),
             lower_price: Decimal::from(lower),
             upper_price: Decimal::from(upper),

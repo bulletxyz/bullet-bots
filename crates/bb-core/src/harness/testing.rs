@@ -8,7 +8,6 @@
 //! strategies that place orders during init and want to avoid a real RPC.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -21,42 +20,23 @@ use crate::types::{
     Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult, Position,
 };
 
-/// Emits a fixed sequence of events, optionally spacing them by a delay, then
-/// returns. Useful for unit-testing actor behavior against known inputs.
+/// Emits a fixed sequence of events, then returns. Tests wire this in where
+/// a production feed would go and assert on actor behavior.
 pub struct ScriptedFeed<E: Event> {
     events: Vec<E>,
-    delay_between: Duration,
-    name: &'static str,
 }
 
 impl<E: Event> ScriptedFeed<E> {
     pub fn new(events: Vec<E>) -> Self {
-        Self { events, delay_between: Duration::from_millis(1), name: "scripted" }
-    }
-
-    #[must_use]
-    pub fn with_delay(mut self, delay: Duration) -> Self {
-        self.delay_between = delay;
-        self
-    }
-
-    #[must_use]
-    pub fn named(mut self, name: &'static str) -> Self {
-        self.name = name;
-        self
+        Self { events }
     }
 }
 
 #[async_trait]
 impl<E: Event> EventFeed<E> for ScriptedFeed<E> {
-    async fn run(self: Box<Self>, tx: EventTx<E>, cx: FeedContext) -> Result<(), BotError> {
-        let this = *self;
-        for event in this.events {
-            if cx.is_cancelled() {
-                return Ok(());
-            }
+    async fn run(self: Box<Self>, tx: EventTx<E>, _cx: FeedContext) -> Result<(), BotError> {
+        for event in self.events {
             let _ = tx.send(event);
-            tokio::time::sleep(this.delay_between).await;
         }
         Ok(())
     }

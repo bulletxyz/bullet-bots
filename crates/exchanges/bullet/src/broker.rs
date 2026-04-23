@@ -39,10 +39,6 @@ impl BulletBroker {
         Self { client, increments }
     }
 
-    pub fn client(&self) -> &Arc<Client> {
-        &self.client
-    }
-
     fn market_id(&self, symbol: &str) -> Result<MarketId, BotError> {
         self.client
             .market_id(symbol)
