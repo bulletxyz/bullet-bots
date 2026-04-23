@@ -1,3 +1,4 @@
+use bb_core::types::OrderType;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -14,6 +15,10 @@ pub enum SpacingMode {
 /// Configuration for the grid trading strategy.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GridConfig {
+    /// Trading symbol (e.g. "BTC-USD"). Lives here rather than on the engine
+    /// so multi-strategy setups can each target their own market.
+    pub symbol: String,
+
     /// Number of grid levels on each side (e.g., 5 = 5 buy + 5 sell = 10 total).
     pub num_levels: usize,
 
@@ -28,9 +33,11 @@ pub struct GridConfig {
     /// Order quantity per grid level.
     pub order_size: Decimal,
 
-    /// Order type to use for grid orders.
+    /// Order type for grid orders. TOML values: `"limit"`, `"post_only"`,
+    /// `"market"`. Typos fail at parse time instead of silently falling
+    /// through to a default.
     #[serde(default = "default_order_type")]
-    pub order_type: String,
+    pub order_type: OrderType,
 
     /// Maximum net position before pausing one side.
     pub max_position: Decimal,
@@ -88,8 +95,8 @@ fn default_spacing_mode() -> SpacingMode {
     SpacingMode::Geometric
 }
 
-fn default_order_type() -> String {
-    "PostOnly".to_string()
+fn default_order_type() -> OrderType {
+    OrderType::PostOnly
 }
 
 fn default_rebalance_threshold() -> Decimal {

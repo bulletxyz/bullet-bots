@@ -29,6 +29,7 @@ impl std::fmt::Display for Side {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OrderType {
     Limit,
     PostOnly,
@@ -155,42 +156,6 @@ pub struct Balance {
     pub asset: String,
     pub available: Decimal,
     pub total: Decimal,
-}
-
-/// Events pushed from an exchange to the engine/strategy.
-#[derive(Debug, Clone)]
-pub enum ExchangeEvent {
-    /// Orderbook snapshot or update.
-    BookUpdate { exchange: String, symbol: String, orderbook: OrderBook },
-    /// An order's status changed.
-    OrderUpdate { exchange: String, order: Order },
-    /// A trade executed against our account.
-    Trade {
-        exchange: String,
-        symbol: String,
-        order_id: String,
-        client_id: Option<String>,
-        side: Side,
-        price: Decimal,
-        quantity: Decimal,
-        is_maker: bool,
-    },
-    /// Mark price and/or funding rate update.
-    MarkPrice { exchange: String, symbol: String, mark_price: Decimal, funding_rate: Decimal },
-    /// Connection was lost. The engine will handle reconnection.
-    Disconnected { exchange: String },
-}
-
-impl ExchangeEvent {
-    pub fn exchange_name(&self) -> &str {
-        match self {
-            ExchangeEvent::BookUpdate { exchange, .. } => exchange,
-            ExchangeEvent::OrderUpdate { exchange, .. } => exchange,
-            ExchangeEvent::Trade { exchange, .. } => exchange,
-            ExchangeEvent::MarkPrice { exchange, .. } => exchange,
-            ExchangeEvent::Disconnected { exchange } => exchange,
-        }
-    }
 }
 
 #[cfg(test)]

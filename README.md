@@ -1,14 +1,30 @@
 # bullet-bots
 
-Open-source trading bot framework for the [Bullet](https://bullet.xyz) perpetual futures DEX and other exchanges.
+Open-source event-driven trading bot framework for the [Bullet](https://bullet.xyz)
+perpetual futures DEX and other exchanges.
 
 ## What's in the box
 
-- **bb-core** — Engine, traits (`Exchange`, `Strategy`), types, error handling, status API
-- **bb-exchange-bullet** — Bullet DEX adapter (REST + auto-reconnecting WebSocket)
-- **bb-exchange-hyperliquid** — Hyperliquid adapter (REST + WS bridge)
-- **bb-strategy-grid** — Grid trading strategy (single exchange)
-- **bb-strategy-funding-arb** — Funding rate arbitrage across two exchanges
+- **bb-core** — Harness, event bus, `Actor` / `EventFeed` / `Broker` traits,
+  shared helpers (`InventoryTracker`, `ClientIdIssuer`, `TickFeed`)
+- **bb-exchange-bullet** — Bullet DEX adapter — typed feeds + REST broker
+- **bb-exchange-hyperliquid** — Hyperliquid adapter — typed feeds + REST broker
+- **bb-strategy-grid** — Grid trading as an actor
+- **bb-strategy-avellaneda-stoikov** — A-S market maker actor
+- **bb-strategy-funding-arb** — Cross-venue funding arb actor
+
+## Architecture at a glance
+
+Strategies are **actors** that consume typed **events** (`Trade`, `BookUpdate`,
+`OrderLifecycle`, `MarkPriceUpdate`, `Tick`) published by **feeds** owned by
+exchange adapters. A shared **harness** wires everything together and handles
+lifecycle, reconnection, and shutdown. See [AGENTS.md](AGENTS.md) for the
+full architecture tour and [HACKING.md](HACKING.md) for a walkthrough of
+adding your own strategy.
+
+Key invariant: `Trade` is the only canonical source of position/PnL changes,
+so double-count bugs from adapters that emit both trade and order-update
+events are structurally impossible.
 
 ## Quick start
 
@@ -16,10 +32,10 @@ Open-source trading bot framework for the [Bullet](https://bullet.xyz) perpetual
 # Build
 cargo build
 
-# Run tests
+# Run tests (57 passing)
 cargo test
 
-# Validate config
+# Validate a config
 cargo run --bin bb-bot -- validate --config config/grid-example.toml
 
 # Run (set keys via env vars, never in config files)
@@ -31,15 +47,29 @@ cargo run --bin bb-bot -- run --config config/grid-example.toml
 
 ### Grid
 
-Places limit orders at fixed intervals around a reference price. When one fills, places a new order on the opposite side. Tracks net position and pauses when limits are hit.
+Places limit orders at fixed intervals around a reference price. When one
+fills, places a new order on the opposite side. Tracks net position and
+pauses when limits are hit. Runs on the harness.
 
 ```sh
 cargo run --bin bb-bot -- run --config config/grid-example.toml
 ```
 
-### Funding Rate Arbitrage
+### Avellaneda-Stoikov market maker
 
-Monitors funding rates on Bullet and Hyperliquid. When the differential exceeds a threshold, opens a delta-neutral position (short the higher-rate exchange, long the lower-rate exchange). Exits when the spread narrows.
+Closed-form reservation-price quoting with inventory skew, plus a
+multi-level ladder. Runs as an actor on the harness.
+
+```sh
+cargo run --bin bb-bot -- run --config config/avellaneda-stoikov-example.toml
+```
+
+### Funding rate arbitrage
+
+Monitors funding rates on two venues and opens a delta-neutral position when
+the differential exceeds a threshold. Per-venue inventory tracking, phase
+state machine (Flat / Entering / Active / Exiting), emergency-flatten on
+timeout or delta imbalance. Runs as an actor on the harness.
 
 ```sh
 export BB_BULLET_PRIVATE_KEY_HEX="0x..."
@@ -47,23 +77,22 @@ export BB_HYPERLIQUID_PRIVATE_KEY_HEX="0x..."
 cargo run --bin bb-bot -- run --config config/funding-arb-example.toml
 ```
 
-## Adding your own strategy
+## Writing your own strategy
 
-1. Create a crate in `crates/strategies/<name>/`
-2. Implement the `Strategy` trait from `bb-core`
-3. Wire it into `bb-bot/src/main.rs`
-4. Add an example config
+1. Create a crate in `crates/strategies/<name>/`.
+2. Implement `Actor` + `EventHandler<E>` for each event type you care about.
+3. Register in `bb-bot/src/main.rs` with `HarnessBuilder::wire_actor`.
+4. Add an example config.
 
-See `crates/strategies/grid/` for a minimal example.
+Full walkthrough: [HACKING.md](HACKING.md).
 
 ## Status API
 
-While running, the bot exposes an HTTP status endpoint:
+While running, the bot exposes an HTTP status endpoint on `engine.status_port`
+(default 3030):
 
 - `GET /health` — liveness check
-- `GET /status` — strategy state, uptime, symbol
-
-Default port: 3030 (configurable via `engine.status_port`).
+- `GET /status` — uptime plus every actor's JSON snapshot keyed by name
 
 ## Requirements
 

@@ -1,98 +1,128 @@
+//! Funding rate arbitrage as an event-driven actor.
+//!
+//! Two-venue delta-neutral strategy. Subscribed events:
+//!   - `MarkPriceUpdate` — cache mark + funding per venue; trigger entry.
+//!   - `Trade` — canonical source of position changes *per venue*. One
+//!     `InventoryTracker` per venue via a `HashMap<exchange, tracker>`.
+//!     The net_delta across both trackers should tend to zero while Active.
+//!   - `BookUpdate` — cache best bid/ask for aggressive pricing.
+//!   - `Tick` — phase-timeout checks, delta-imbalance guard, exit condition.
+//!
+//! Key fix vs. pre-harness version: position updates come from `Trade` only,
+//! so the "double-count via Trade + OrderUpdate" bug that used to happen on
+//! HL is structurally impossible. The `order.symbol` vs `exchange` name
+//! confusion is gone too — events are typed and carry explicit `exchange`.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use bb_core::broker::Broker;
 use bb_core::error::BotError;
-use bb_core::strategy::{Strategy, StrategyContext};
-use bb_core::types::*;
+use bb_core::events::{BookUpdate, MarkPriceUpdate, Tick, Trade};
+use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
+use bb_core::helpers::InventoryTracker;
+use bb_core::types::{NewOrder, OrderBook, OrderType, Side};
 use rust_decimal::Decimal;
 
-use crate::config::FundingArbConfig;
+use crate::config::{FundingArbConfig, OrderMode};
 use crate::state::{ArbLeg, ArbPhase, ArbState};
 
-/// Funding rate arbitrage strategy.
-///
-/// Monitors funding rates on two exchanges. When the differential exceeds
-/// `entry_threshold`, opens a delta-neutral position (short the higher-rate
-/// exchange, long the lower-rate exchange). Exits when the spread narrows
-/// below `exit_threshold`.
-pub struct FundingArbStrategy {
+pub struct FundingArbActor {
     config: FundingArbConfig,
     state: ArbState,
+    /// Per-venue inventory. Each Trade updates exactly one tracker.
+    inventory: HashMap<String, InventoryTracker>,
+    books: HashMap<String, OrderBook>,
 }
 
-impl FundingArbStrategy {
+impl FundingArbActor {
     pub fn new(config: FundingArbConfig) -> Self {
-        Self { config, state: ArbState::new() }
-    }
-
-    /// Determine which exchange to short (the one paying higher funding)
-    /// and which to long. Returns (short_exchange, long_exchange).
-    fn pick_sides(&self) -> (&str, &str) {
-        if self.state.rate_a > self.state.rate_b {
-            // A pays more funding -> short A, long B
-            (&self.config.exchange_a, &self.config.exchange_b)
-        } else {
-            // B pays more funding -> short B, long A
-            (&self.config.exchange_b, &self.config.exchange_a)
+        let mut inventory = HashMap::new();
+        inventory.insert(config.exchange_a.clone(), InventoryTracker::new());
+        inventory.insert(config.exchange_b.clone(), InventoryTracker::new());
+        Self {
+            config,
+            state: ArbState::new(),
+            inventory,
+            books: HashMap::new(),
         }
     }
 
-    /// Check if funding rates pass the anomaly filter.
+    fn symbol(&self) -> &str {
+        &self.config.symbol
+    }
+
+    fn broker(
+        &self,
+        cx: &ActorContext,
+        exchange: &str,
+    ) -> Result<Arc<dyn Broker>, BotError> {
+        cx.brokers().require(exchange).map(Arc::clone)
+    }
+
+    fn net_position(&self, exchange: &str) -> Decimal {
+        self.inventory.get(exchange).map(|i| i.net_position).unwrap_or(Decimal::ZERO)
+    }
+
+    /// Net delta across both legs — should be near zero when Active.
+    fn net_delta(&self) -> Decimal {
+        self.net_position(&self.config.exchange_a) + self.net_position(&self.config.exchange_b)
+    }
+
     fn rates_sane(&self) -> bool {
         self.state.rate_a.abs() < self.config.max_funding_rate
             && self.state.rate_b.abs() < self.config.max_funding_rate
     }
 
-    /// Build an aggressive order at the best opposing price + slippage.
-    fn aggressive_order(
-        &self,
-        ctx: &StrategyContext,
-        exchange: &str,
-        side: Side,
-    ) -> NewOrder {
-        let symbol = ctx.config.symbol.clone();
-        let slippage = self.config.slippage;
-
-        // Get best price from cached orderbook, or fall back to mark price.
-        let base_price = ctx
-            .orderbook(exchange)
-            .and_then(|book| match side {
-                Side::Buy => book.best_ask().map(|l| l.price),
-                Side::Sell => book.best_bid().map(|l| l.price),
-            })
-            .unwrap_or_else(|| {
-                if exchange == self.config.exchange_a {
-                    self.state.mark_a
-                } else {
-                    self.state.mark_b
-                }
-            });
-
-        let price = match side {
-            Side::Buy => base_price * (Decimal::ONE + slippage),
-            Side::Sell => base_price * (Decimal::ONE - slippage),
-        };
-
-        let order_type = match self.config.order_mode.as_str() {
-            "passive" => OrderType::PostOnly,
-            _ => OrderType::Market,
-        };
-
-        NewOrder {
-            symbol,
-            side,
-            order_type,
-            price,
-            quantity: self.config.order_size,
-            client_id: None,
-            reduce_only: false,
+    /// (short_exchange, long_exchange) — short the leg with the higher funding.
+    fn pick_sides(&self) -> (String, String) {
+        if self.state.rate_a > self.state.rate_b {
+            (self.config.exchange_a.clone(), self.config.exchange_b.clone())
+        } else {
+            (self.config.exchange_b.clone(), self.config.exchange_a.clone())
         }
     }
 
-    /// Enter: place orders on both legs simultaneously.
-    async fn enter(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        let (short_ex, long_ex) = self.pick_sides();
-        let short_ex = short_ex.to_string();
-        let long_ex = long_ex.to_string();
+    fn aggressive_price(&self, exchange: &str, side: Side) -> Decimal {
+        let book_price = self.books.get(exchange).and_then(|b| match side {
+            Side::Buy => b.best_ask().map(|l| l.price),
+            Side::Sell => b.best_bid().map(|l| l.price),
+        });
+        let base = book_price.unwrap_or_else(|| {
+            if exchange == self.config.exchange_a {
+                self.state.mark_a
+            } else {
+                self.state.mark_b
+            }
+        });
+        match side {
+            Side::Buy => base * (Decimal::ONE + self.config.slippage),
+            Side::Sell => base * (Decimal::ONE - self.config.slippage),
+        }
+    }
 
+    fn order_type(&self) -> OrderType {
+        match self.config.order_mode {
+            OrderMode::Passive => OrderType::PostOnly,
+            OrderMode::Aggressive => OrderType::Market,
+        }
+    }
+
+    fn make_order(&self, exchange: &str, side: Side, size: Decimal, reduce_only: bool) -> NewOrder {
+        NewOrder {
+            symbol: self.symbol().to_string(),
+            side,
+            order_type: self.order_type(),
+            price: self.aggressive_price(exchange, side),
+            quantity: size,
+            client_id: None,
+            reduce_only,
+        }
+    }
+
+    async fn enter(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        let (short_ex, long_ex) = self.pick_sides();
         tracing::info!(
             spread = %self.state.abs_rate_spread(),
             short = %short_ex,
@@ -105,173 +135,223 @@ impl FundingArbStrategy {
             Side::Sell,
             self.config.order_size,
         ));
-        self.state.leg_b = Some(ArbLeg::new(
-            long_ex.clone(),
-            Side::Buy,
-            self.config.order_size,
-        ));
+        self.state.leg_b = Some(ArbLeg::new(long_ex.clone(), Side::Buy, self.config.order_size));
         self.state.transition(ArbPhase::Entering);
 
-        // Place both legs. We do them sequentially here; the engine's tick timeout
-        // provides the safety net if one hangs.
-        let short_orders = [self.aggressive_order(ctx, &short_ex, Side::Sell)];
-        let long_orders = [self.aggressive_order(ctx, &long_ex, Side::Buy)];
+        let short_orders = [self.make_order(&short_ex, Side::Sell, self.config.order_size, false)];
+        let long_orders = [self.make_order(&long_ex, Side::Buy, self.config.order_size, false)];
 
-        let (short_result, long_result) = tokio::join!(
-            ctx.place_orders(&short_ex, &short_orders),
-            ctx.place_orders(&long_ex, &long_orders),
-        );
-
-        if let Err(e) = &short_result {
-            tracing::error!(exchange = %short_ex, error = %e, "Failed to place short leg");
+        let (short_b, long_b) = (self.broker(cx, &short_ex)?, self.broker(cx, &long_ex)?);
+        let (short_res, long_res) =
+            tokio::join!(short_b.place_orders(&short_orders), long_b.place_orders(&long_orders));
+        if let Err(e) = &short_res {
+            tracing::error!(exchange = %short_ex, error = %e, "Short leg placement failed");
         }
-        if let Err(e) = &long_result {
-            tracing::error!(exchange = %long_ex, error = %e, "Failed to place long leg");
+        if let Err(e) = &long_res {
+            tracing::error!(exchange = %long_ex, error = %e, "Long leg placement failed");
         }
-
         Ok(())
     }
 
-    /// Exit: place close orders on both legs.
-    async fn exit(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        tracing::info!(
-            spread = %self.state.abs_rate_spread(),
-            "Exiting arb position"
-        );
+    async fn exit(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        tracing::info!(spread = %self.state.abs_rate_spread(), "Exiting arb position");
         self.state.transition(ArbPhase::Exiting);
 
-        if let Some(ref leg) = self.state.leg_a {
-            let close_side = leg.side.opposite();
-            let order = self.aggressive_order(ctx, &leg.exchange, close_side);
-            let ex = leg.exchange.clone();
-            if let Err(e) = ctx.place_orders(&ex, &[order]).await {
-                tracing::error!(exchange = %ex, error = %e, "Failed to place close order");
+        // For each leg, close whatever position we actually hold (handles
+        // partial-fill asymmetry — close exactly what exists on that venue).
+        for leg in [self.state.leg_a.clone(), self.state.leg_b.clone()].into_iter().flatten() {
+            let pos = self.net_position(&leg.exchange);
+            if pos.is_zero() {
+                continue;
+            }
+            let (close_side, qty) = if pos.is_sign_positive() {
+                (Side::Sell, pos)
+            } else {
+                (Side::Buy, -pos)
+            };
+            let order = self.make_order(&leg.exchange, close_side, qty, true);
+            let broker = self.broker(cx, &leg.exchange)?;
+            if let Err(e) = broker.place_orders(&[order]).await {
+                tracing::error!(exchange = %leg.exchange, error = %e, "Close order failed");
             }
         }
-        if let Some(ref leg) = self.state.leg_b {
-            let close_side = leg.side.opposite();
-            let order = self.aggressive_order(ctx, &leg.exchange, close_side);
-            let ex = leg.exchange.clone();
-            if let Err(e) = ctx.place_orders(&ex, &[order]).await {
-                tracing::error!(exchange = %ex, error = %e, "Failed to place close order");
-            }
-        }
-
         Ok(())
     }
 
-    /// Emergency flatten: cancel everything, market-close all positions.
-    async fn emergency_flatten(
-        &mut self,
-        ctx: &mut StrategyContext,
-        reason: &str,
-    ) -> Result<(), BotError> {
+    async fn emergency_flatten(&mut self, cx: &ActorContext, reason: &str) -> Result<(), BotError> {
         tracing::warn!(reason, "Emergency flatten");
-        let symbol = ctx.config.symbol.clone();
-
-        // Cancel all on both exchanges.
-        let _ = ctx.cancel_all_orders(&self.config.exchange_a, &symbol).await;
-        let _ = ctx.cancel_all_orders(&self.config.exchange_b, &symbol).await;
-
-        // Close any filled leg.
-        if let Some(ref leg) = self.state.leg_a {
-            if !leg.filled_size.is_zero() {
-                let order = NewOrder {
-                    symbol: symbol.clone(),
-                    side: leg.side.opposite(),
-                    order_type: OrderType::Market,
-                    price: if leg.side == Side::Buy {
-                        self.state.mark_a * (Decimal::ONE - self.config.slippage)
-                    } else {
-                        self.state.mark_a * (Decimal::ONE + self.config.slippage)
-                    },
-                    quantity: leg.filled_size,
-                    client_id: None,
-                    reduce_only: true,
-                };
-                let _ = ctx.place_orders(&leg.exchange, &[order]).await;
+        for ex in [&self.config.exchange_a, &self.config.exchange_b] {
+            let broker = self.broker(cx, ex)?;
+            let _ = broker.cancel_all_orders(self.symbol()).await;
+            let pos = self.net_position(ex);
+            if pos.is_zero() {
+                continue;
             }
+            let (close_side, qty) = if pos.is_sign_positive() {
+                (Side::Sell, pos)
+            } else {
+                (Side::Buy, -pos)
+            };
+            let mut order = self.make_order(ex, close_side, qty, true);
+            order.order_type = OrderType::Market; // force IoC regardless of config
+            let _ = broker.place_orders(&[order]).await;
         }
-        if let Some(ref leg) = self.state.leg_b {
-            if !leg.filled_size.is_zero() {
-                let order = NewOrder {
-                    symbol: symbol.clone(),
-                    side: leg.side.opposite(),
-                    order_type: OrderType::Market,
-                    price: if leg.side == Side::Buy {
-                        self.state.mark_b * (Decimal::ONE - self.config.slippage)
-                    } else {
-                        self.state.mark_b * (Decimal::ONE + self.config.slippage)
-                    },
-                    quantity: leg.filled_size,
-                    client_id: None,
-                    reduce_only: true,
-                };
-                let _ = ctx.place_orders(&leg.exchange, &[order]).await;
-            }
-        }
-
         self.state.go_flat();
         Ok(())
     }
 
-    /// Process a fill event, updating the appropriate leg.
-    fn apply_fill(&mut self, exchange: &str, side: Side, price: Decimal, quantity: Decimal) {
-        let leg = if self.state.leg_a.as_ref().is_some_and(|l| l.exchange == exchange) {
-            self.state.leg_a.as_mut()
-        } else if self.state.leg_b.as_ref().is_some_and(|l| l.exchange == exchange) {
-            self.state.leg_b.as_mut()
-        } else {
-            return;
-        };
-
-        if let Some(leg) = leg {
-            if leg.side == side {
-                leg.record_fill(price, quantity);
-                tracing::info!(
-                    exchange,
-                    side = %side,
-                    price = %price,
-                    qty = %quantity,
-                    filled = %leg.filled_size,
-                    target = %leg.target_size,
-                    "Arb leg fill"
-                );
+    fn both_legs_fully_entered(&self) -> bool {
+        match (&self.state.leg_a, &self.state.leg_b) {
+            (Some(a), Some(b)) => {
+                a.is_fully_entered(self.net_position(&a.exchange))
+                    && b.is_fully_entered(self.net_position(&b.exchange))
             }
+            _ => false,
         }
+    }
+
+    fn both_legs_flat(&self) -> bool {
+        self.net_position(&self.config.exchange_a).is_zero()
+            && self.net_position(&self.config.exchange_b).is_zero()
     }
 }
 
 #[async_trait]
-impl Strategy for FundingArbStrategy {
-    fn name(&self) -> &str {
-        "funding-arb"
-    }
-
-    async fn on_start(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        let symbol = ctx.config.symbol.clone();
-
-        // Cancel stale orders on both exchanges.
-        tracing::info!("Cancelling stale orders on both exchanges");
-        let _ = ctx.cancel_all_orders(&self.config.exchange_a, &symbol).await;
-        let _ = ctx.cancel_all_orders(&self.config.exchange_b, &symbol).await;
-
+impl Actor for FundingArbActor {
+    async fn init(&mut self, cx: &ActorContext) -> Result<(), BotError> {
         tracing::info!(
             exchange_a = %self.config.exchange_a,
             exchange_b = %self.config.exchange_b,
             entry = %self.config.entry_threshold,
             exit = %self.config.exit_threshold,
             size = %self.config.order_size,
-            "Funding arb strategy started"
+            "Funding arb actor started"
         );
-
+        // Cancel stale orders on both venues.
+        for ex in [&self.config.exchange_a, &self.config.exchange_b] {
+            let _ = self.broker(cx, ex)?.cancel_all_orders(self.symbol()).await;
+        }
         Ok(())
     }
 
-    async fn on_tick(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
+    async fn wind_down(
+        &mut self,
+        _reason: &WindDownReason,
+        cx: &ActorContext,
+    ) -> Result<(), BotError> {
+        if self.state.phase != ArbPhase::Flat {
+            let _ = self.emergency_flatten(cx, "shutdown").await;
+        } else {
+            for ex in [&self.config.exchange_a, &self.config.exchange_b] {
+                let _ = self.broker(cx, ex)?.cancel_all_orders(self.symbol()).await;
+            }
+        }
+        tracing::info!(
+            cycles = self.state.cycles_completed,
+            net_delta = %self.net_delta(),
+            "Funding arb final stats"
+        );
+        Ok(())
+    }
+
+    fn status(&self) -> serde_json::Value {
+        let inv_a = self.inventory.get(&self.config.exchange_a).cloned().unwrap_or_default();
+        let inv_b = self.inventory.get(&self.config.exchange_b).cloned().unwrap_or_default();
+        serde_json::json!({
+            "phase": format!("{:?}", self.state.phase),
+            "rate_a": self.state.rate_a.to_string(),
+            "rate_b": self.state.rate_b.to_string(),
+            "spread": self.state.abs_rate_spread().to_string(),
+            "net_delta": self.net_delta().to_string(),
+            "mark_a": self.state.mark_a.to_string(),
+            "mark_b": self.state.mark_b.to_string(),
+            "inventory_a": inv_a,
+            "inventory_b": inv_b,
+            "cycles_completed": self.state.cycles_completed,
+        })
+    }
+}
+
+#[async_trait]
+impl EventHandler<MarkPriceUpdate> for FundingArbActor {
+    async fn on_event(
+        &mut self,
+        event: MarkPriceUpdate,
+        cx: &ActorContext,
+    ) -> Result<(), BotError> {
+        if event.symbol != self.symbol() {
+            return Ok(());
+        }
+        if event.exchange == self.config.exchange_a {
+            self.state.mark_a = event.mark_price;
+            self.state.rate_a = event.funding_rate;
+        } else if event.exchange == self.config.exchange_b {
+            self.state.mark_b = event.mark_price;
+            self.state.rate_b = event.funding_rate;
+        } else {
+            return Ok(());
+        }
+
+        // Entry trigger: only when flat, both marks valid, rates sane, spread
+        // wide, and we've been flat at least `min_flat_hold_secs`. The hold
+        // window guards against spread wobble and post-flatten re-entry.
+        let hold_elapsed = self
+            .state
+            .phase_entered_at
+            .map(|t| t.elapsed().as_secs() >= self.config.min_flat_hold_secs)
+            .unwrap_or(true);
+
+        if self.state.phase == ArbPhase::Flat
+            && hold_elapsed
+            && self.state.abs_rate_spread() > self.config.entry_threshold
+            && self.rates_sane()
+            && !self.state.mark_a.is_zero()
+            && !self.state.mark_b.is_zero()
+        {
+            self.enter(cx).await?;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventHandler<Trade> for FundingArbActor {
+    async fn on_event(&mut self, event: Trade, _cx: &ActorContext) -> Result<(), BotError> {
+        if event.symbol != self.symbol() {
+            return Ok(());
+        }
+        let Some(inv) = self.inventory.get_mut(&event.exchange) else {
+            return Ok(());
+        };
+        inv.record_fill(event.side, event.price, event.quantity);
+        tracing::info!(
+            exchange = %event.exchange,
+            side = %event.side,
+            qty = %event.quantity,
+            price = %event.price,
+            net = %inv.net_position,
+            "arb fill"
+        );
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventHandler<BookUpdate> for FundingArbActor {
+    async fn on_event(&mut self, event: BookUpdate, _cx: &ActorContext) -> Result<(), BotError> {
+        if event.symbol != self.symbol() {
+            return Ok(());
+        }
+        self.books.insert(event.exchange, event.orderbook);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventHandler<Tick> for FundingArbActor {
+    async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
         match self.state.phase {
             ArbPhase::Flat => {
-                // Log current rates.
                 tracing::info!(
                     rate_a = %self.state.rate_a,
                     rate_b = %self.state.rate_b,
@@ -280,153 +360,46 @@ impl Strategy for FundingArbStrategy {
                 );
             }
             ArbPhase::Entering => {
-                // Check timeout.
                 if self.state.phase_timed_out(self.config.phase_timeout_secs) {
-                    self.emergency_flatten(ctx, "entering phase timed out").await?;
+                    self.emergency_flatten(cx, "entering phase timed out").await?;
                     return Ok(());
                 }
-                // Check if both legs filled.
-                if self.state.both_legs_filled() {
+                if self.both_legs_fully_entered() {
                     tracing::info!("Both legs filled, position active");
                     self.state.transition(ArbPhase::Active);
                 }
             }
             ArbPhase::Active => {
-                // Delta imbalance check.
-                let delta = self.state.net_delta().abs();
+                let delta = self.net_delta().abs();
                 if delta > self.config.max_delta_imbalance {
-                    self.emergency_flatten(ctx, "delta imbalance exceeded").await?;
+                    self.emergency_flatten(cx, "delta imbalance exceeded").await?;
                     return Ok(());
                 }
-
-                // Check if spread has narrowed below exit threshold.
                 if self.state.abs_rate_spread() < self.config.exit_threshold {
-                    self.exit(ctx).await?;
+                    self.exit(cx).await?;
                     return Ok(());
                 }
-
                 tracing::info!(
                     spread = %self.state.abs_rate_spread(),
-                    delta = %self.state.net_delta(),
+                    delta = %self.net_delta(),
                     "Active arb position"
                 );
             }
             ArbPhase::Exiting => {
                 if self.state.phase_timed_out(self.config.phase_timeout_secs) {
-                    self.emergency_flatten(ctx, "exiting phase timed out").await?;
+                    self.emergency_flatten(cx, "exiting phase timed out").await?;
                     return Ok(());
                 }
-            }
-        }
-        Ok(())
-    }
-
-    async fn on_event(
-        &mut self,
-        ctx: &mut StrategyContext,
-        event: ExchangeEvent,
-    ) -> Result<(), BotError> {
-        match event {
-            ExchangeEvent::MarkPrice { ref exchange, mark_price, funding_rate, .. } => {
-                if exchange == &self.config.exchange_a {
-                    self.state.mark_a = mark_price;
-                    self.state.rate_a = funding_rate;
-                } else if exchange == &self.config.exchange_b {
-                    self.state.mark_b = mark_price;
-                    self.state.rate_b = funding_rate;
-                }
-
-                // Entry signal check (only when Flat).
-                if self.state.phase == ArbPhase::Flat
-                    && self.state.abs_rate_spread() > self.config.entry_threshold
-                    && self.rates_sane()
-                    && !self.state.mark_a.is_zero()
-                    && !self.state.mark_b.is_zero()
-                {
-                    self.enter(ctx).await?;
-                }
-            }
-            ExchangeEvent::Trade {
-                ref exchange, side, price, quantity, ..
-            } => {
-                self.apply_fill(exchange, side, price, quantity);
-
-                // Check if entering phase is done.
-                if self.state.phase == ArbPhase::Entering && self.state.both_legs_filled() {
-                    tracing::info!("Both legs filled, position active");
-                    self.state.transition(ArbPhase::Active);
-                }
-            }
-            ExchangeEvent::OrderUpdate { ref order, .. } => {
-                if order.status == OrderStatus::Filled {
-                    self.apply_fill(
-                        order.symbol.as_str(), // fallback; exchange name not on Order
-                        order.side,
-                        order.price,
-                        order.quantity,
+                if self.both_legs_flat() {
+                    self.state.cycles_completed += 1;
+                    tracing::info!(
+                        cycles = self.state.cycles_completed,
+                        "Arb cycle completed"
                     );
-                }
-
-                // Exiting: if both legs close, go flat.
-                if self.state.phase == ArbPhase::Exiting {
-                    // Simplified: when we see filled close orders, reduce leg size.
-                    // A more precise implementation would track close fills separately.
-                    let a_done = self.state.leg_a.as_ref().map_or(true, |l| l.filled_size.is_zero());
-                    let b_done = self.state.leg_b.as_ref().map_or(true, |l| l.filled_size.is_zero());
-                    if a_done && b_done {
-                        self.state.cycles_completed += 1;
-                        tracing::info!(cycles = self.state.cycles_completed, "Arb cycle completed");
-                        self.state.go_flat();
-                    }
+                    self.state.go_flat();
                 }
             }
-            _ => {}
         }
         Ok(())
-    }
-
-    async fn on_stop(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        tracing::info!("Shutting down funding arb strategy");
-
-        if self.state.phase != ArbPhase::Flat {
-            self.emergency_flatten(ctx, "shutdown").await?;
-        } else {
-            let symbol = ctx.config.symbol.clone();
-            let _ = ctx.cancel_all_orders(&self.config.exchange_a, &symbol).await;
-            let _ = ctx.cancel_all_orders(&self.config.exchange_b, &symbol).await;
-        }
-
-        tracing::info!(
-            cycles = self.state.cycles_completed,
-            pnl = %self.state.realized_pnl,
-            "Funding arb final stats"
-        );
-        Ok(())
-    }
-
-    fn status(&self) -> serde_json::Value {
-        serde_json::json!({
-            "phase": format!("{:?}", self.state.phase),
-            "rate_a": self.state.rate_a.to_string(),
-            "rate_b": self.state.rate_b.to_string(),
-            "spread": self.state.abs_rate_spread().to_string(),
-            "net_delta": self.state.net_delta().to_string(),
-            "mark_a": self.state.mark_a.to_string(),
-            "mark_b": self.state.mark_b.to_string(),
-            "cycles_completed": self.state.cycles_completed,
-            "realized_pnl": self.state.realized_pnl.to_string(),
-            "leg_a": self.state.leg_a.as_ref().map(|l| serde_json::json!({
-                "exchange": l.exchange,
-                "side": format!("{:?}", l.side),
-                "filled": l.filled_size.to_string(),
-                "target": l.target_size.to_string(),
-            })),
-            "leg_b": self.state.leg_b.as_ref().map(|l| serde_json::json!({
-                "exchange": l.exchange,
-                "side": format!("{:?}", l.side),
-                "filled": l.filled_size.to_string(),
-                "target": l.target_size.to_string(),
-            })),
-        })
     }
 }

@@ -1,0 +1,91 @@
+//! Type-indexed broadcast bus.
+//!
+//! The bus stores one `broadcast::Sender<E>` per concrete event type, created
+//! lazily on first access. Feeds obtain a sender via [`EventBus::sender`];
+//! actors obtain a receiver via [`EventBus::subscribe`]. Both calls are
+//! idempotent — subsequent calls for the same `E` hand out clones / new
+//! subscriptions of the same underlying channel.
+
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::broadcast;
+
+use super::event::Event;
+
+/// Default buffer size for per-event-type broadcast channels. A slow subscriber
+/// that lags past this bound will see `RecvError::Lagged`; the harness logs
+/// and skips. 1024 is large enough for typical quoting cadence without
+/// hoarding memory when events are small.
+const DEFAULT_CAPACITY: usize = 1024;
+
+#[derive(Clone, Default)]
+pub struct EventBus {
+    inner: Arc<Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
+}
+
+impl EventBus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Obtain a sender for events of type `E`. The first call for a given `E`
+    /// creates the channel; later calls return clones of the same sender.
+    pub fn sender<E: Event>(&self) -> broadcast::Sender<E> {
+        let mut guard = self.inner.lock().expect("event bus mutex poisoned");
+        let entry = guard
+            .entry(TypeId::of::<E>())
+            .or_insert_with(|| Box::new(broadcast::channel::<E>(DEFAULT_CAPACITY).0));
+        entry
+            .downcast_ref::<broadcast::Sender<E>>()
+            .expect("EventBus TypeId maps to wrong sender type")
+            .clone()
+    }
+
+    /// Subscribe to events of type `E`. Panics cannot happen: the sender is
+    /// created on demand via [`sender`] if it doesn't exist yet.
+    pub fn subscribe<E: Event>(&self) -> broadcast::Receiver<E> {
+        self.sender::<E>().subscribe()
+    }
+}
+
+impl std::fmt::Debug for EventBus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let len = self.inner.lock().map(|g| g.len()).unwrap_or(0);
+        f.debug_struct("EventBus").field("channels", &len).finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct A(u32);
+    #[derive(Clone, Debug, PartialEq)]
+    struct B(&'static str);
+
+    #[tokio::test]
+    async fn sends_and_receives_per_type() {
+        let bus = EventBus::new();
+        let mut rx_a = bus.subscribe::<A>();
+        let mut rx_b = bus.subscribe::<B>();
+
+        bus.sender::<A>().send(A(42)).unwrap();
+        bus.sender::<B>().send(B("hi")).unwrap();
+
+        assert_eq!(rx_a.recv().await.unwrap(), A(42));
+        assert_eq!(rx_b.recv().await.unwrap(), B("hi"));
+    }
+
+    #[tokio::test]
+    async fn multiple_subscribers_each_see_events() {
+        let bus = EventBus::new();
+        let mut rx1 = bus.subscribe::<A>();
+        let mut rx2 = bus.subscribe::<A>();
+        bus.sender::<A>().send(A(7)).unwrap();
+        assert_eq!(rx1.recv().await.unwrap(), A(7));
+        assert_eq!(rx2.recv().await.unwrap(), A(7));
+    }
+}

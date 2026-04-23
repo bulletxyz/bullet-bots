@@ -1,3 +1,4 @@
+use bb_core::types::OrderType;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -14,6 +15,9 @@ use serde::Deserialize;
 ///   scales the inventory-skew term. 60–300s is a reasonable starting range.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AvellanedaStoikovConfig {
+    /// Trading symbol (e.g. "BTC-USD").
+    pub symbol: String,
+
     /// Order quantity per quote.
     pub order_size: Decimal,
 
@@ -71,9 +75,9 @@ pub struct AvellanedaStoikovConfig {
     #[serde(default)]
     pub order_level_amount_step: Decimal,
 
-    /// Order type; defaults to `PostOnly` (maker-only).
+    /// Order type for quotes. TOML: `"post_only"` (default), `"limit"`, `"market"`.
     #[serde(default = "default_order_type")]
-    pub order_type: String,
+    pub order_type: OrderType,
 
     /// Optional fee-floor guardrail. If set, `on_start` refuses to run when
     /// the configured `min_half_spread_bps` can't cover round-trip maker fees.
@@ -112,8 +116,8 @@ fn default_max_half_spread_bps() -> Decimal {
     Decimal::from(500)
 }
 
-fn default_order_type() -> String {
-    "PostOnly".to_string()
+fn default_order_type() -> OrderType {
+    OrderType::PostOnly
 }
 
 fn default_min_spread_fee_multiplier() -> Decimal {

@@ -3,4 +3,4 @@ pub mod state;
 pub mod strategy;
 
 pub use config::FundingArbConfig;
-pub use strategy::FundingArbStrategy;
+pub use strategy::FundingArbActor;

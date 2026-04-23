@@ -1,9 +1,23 @@
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
+/// How the arb places entry/exit orders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderMode {
+    /// Aggressive IoC at best opposing + configured slippage.
+    Aggressive,
+    /// Passive post-only at the near touch. Only makes sense for thin flow;
+    /// trades off fill certainty for maker rebates.
+    Passive,
+}
+
 /// Configuration for the funding rate arbitrage strategy.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FundingArbConfig {
+    /// Trading symbol (e.g. "BTC-USD").
+    pub symbol: String,
+
     /// Name of exchange A (the "long funding" side when rate_a > rate_b).
     pub exchange_a: String,
 
@@ -33,9 +47,9 @@ pub struct FundingArbConfig {
     #[serde(default = "default_max_rate")]
     pub max_funding_rate: Decimal,
 
-    /// Order mode: "aggressive" (IoC) or "passive" (PostOnly).
+    /// Order mode: TOML `"aggressive"` (default, IoC) or `"passive"` (PostOnly).
     #[serde(default = "default_order_mode")]
-    pub order_mode: String,
+    pub order_mode: OrderMode,
 
     /// Timeout for Entering/Exiting phases before emergency flatten (seconds).
     #[serde(default = "default_phase_timeout_secs")]
@@ -44,6 +58,13 @@ pub struct FundingArbConfig {
     /// Slippage tolerance for aggressive orders (fraction, e.g., 0.001 = 0.1%).
     #[serde(default = "default_slippage")]
     pub slippage: Decimal,
+
+    /// Minimum seconds to remain `Flat` before a fresh entry is allowed.
+    /// Guards against rapid re-entry when the spread wobbles around the
+    /// threshold; also prevents an insta-re-enter after an emergency flatten
+    /// while the condition that triggered it is still live.
+    #[serde(default = "default_min_flat_hold_secs")]
+    pub min_flat_hold_secs: u64,
 }
 
 fn default_max_notional() -> Decimal {
@@ -58,8 +79,8 @@ fn default_max_rate() -> Decimal {
     Decimal::new(5, 3) // 0.005
 }
 
-fn default_order_mode() -> String {
-    "aggressive".to_string()
+fn default_order_mode() -> OrderMode {
+    OrderMode::Aggressive
 }
 
 fn default_phase_timeout_secs() -> u64 {
@@ -68,4 +89,8 @@ fn default_phase_timeout_secs() -> u64 {
 
 fn default_slippage() -> Decimal {
     Decimal::new(1, 3) // 0.001
+}
+
+fn default_min_flat_hold_secs() -> u64 {
+    60
 }

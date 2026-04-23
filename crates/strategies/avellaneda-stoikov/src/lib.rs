@@ -1,10 +1,10 @@
 //! Avellaneda-Stoikov market-making strategy.
 //!
-//! Quotes a single bid/ask around a reservation price that shifts with
+//! Quotes a bid/ask ladder around a reservation price that shifts with
 //! inventory. Follows the classic finite-horizon A-S closed form (2008) as
 //! implemented by Hummingbot's `avellaneda_market_making`, with standard
-//! production tricks layered on: volatility from a rolling window, min/max
-//! spread clamps, fee-floor guardrail, and a hard `max_position` backstop.
+//! production tricks: volatility from a rolling window, min/max spread
+//! clamps, fee-floor guardrail, and a hard `max_position` backstop.
 
 pub mod config;
 pub mod model;
@@ -12,4 +12,4 @@ pub mod strategy;
 pub mod volatility;
 
 pub use config::AvellanedaStoikovConfig;
-pub use strategy::AvellanedaStoikovStrategy;
+pub use strategy::AvellanedaStoikovActor;

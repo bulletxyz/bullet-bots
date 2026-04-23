@@ -1,5 +1,5 @@
 # Tight grid designed to actually get filled so we can verify the fill-handling
-# path (record_fill, mark_filled, opposite-side replacement).
+# path (Trade event → InventoryTracker update → opposite-side replacement).
 #
 # Geometry at BTC ≈ $78k with 0.02% spacing:
 #   level-1 buy  ≈ $15.6 below mid  → lands on or just below best bid
@@ -9,9 +9,7 @@
 # side of the fill pipeline, not to take).
 
 [engine]
-symbol = "BTC-USD"
 tick_interval_ms = 2000
-reconnect_max_delay_ms = 60000
 status_port = 3030
 
 [exchanges.bullet]
@@ -23,11 +21,12 @@ private_key_hex = ""
 type = "grid"
 
 [strategy.grid]
+symbol = "BTC-USD"
 num_levels = 5
 spacing_mode = "geometric"
 grid_spacing = "0.02"
 order_size = "0.0001"
-order_type = "PostOnly"
+order_type = "post_only"
 max_position = "0.002"
 rebalance_threshold_pct = "0.1"
 

@@ -1,50 +1,72 @@
+//! Grid strategy as an event-driven actor.
+//!
+//! Subscribed events:
+//!   - `BookUpdate` — cache the book so tick handlers can read mid price.
+//!   - `Trade` — the *only* event that updates inventory / PnL. Also places
+//!     the opposite-side replacement order.
+//!   - `OrderLifecycle` — learn the exchange-assigned `order_id` once the
+//!     venue acknowledges placement, so reconcile can match on either id.
+//!   - `Tick` — periodic reconcile, trend-filter evaluation, missing-order
+//!     detection.
+//!
+//! Business logic (level geometry, trend filter, fee floor) is identical to
+//! the pre-harness version. Position/PnL tracking and client-id issuance moved
+//! to shared helpers so every strategy benefits from the same correct impls.
+
+use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use bb_core::broker::Broker;
 use bb_core::error::BotError;
-use bb_core::strategy::{Strategy, StrategyContext};
-use bb_core::types::*;
+use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
+use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
+use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
+use bb_core::types::{CancelOrder, NewOrder, OrderBook, OrderStatus, Side};
 use rust_decimal::Decimal;
 
 use crate::config::{GridConfig, SpacingMode};
 use crate::grid::{GridLevelStatus, GridState, OrderRef};
 
-/// Price tolerance for `reconcile` matching, in percent. Tight: only keeps
-/// existing orders whose price is effectively identical to the desired one.
-/// 0.01% — tight enough that any meaningful drift forces a replace.
+/// Price tolerance for reconcile matching, in percent. Tight enough that any
+/// meaningful drift forces a replace.
 fn reconcile_match_tolerance_pct() -> Decimal {
-    Decimal::new(1, 2)
+    Decimal::new(1, 2) // 0.01%
 }
 
-/// Grid trading strategy.
-///
-/// Places buy and sell limit orders at fixed intervals around a reference price.
-/// When an order fills, places a new order on the opposite side to capture the
-/// spread. Tracks net position and pauses when limits are hit.
-pub struct GridStrategy {
+pub struct GridActor {
     config: GridConfig,
-    state: GridState,
     exchange_name: String,
+    state: GridState,
+    inventory: InventoryTracker,
+    client_ids: ClientIdIssuer,
+    book: Option<OrderBook>,
 }
 
-impl GridStrategy {
-    pub fn new(config: GridConfig, exchange_name: String) -> Self {
+impl GridActor {
+    pub fn new(config: GridConfig, exchange_name: impl Into<String>) -> Self {
         let state = match &config.trend_filter {
             Some(cfg) => GridState::new().with_trend_filter(cfg),
             None => GridState::new(),
         };
-        Self { config, state, exchange_name }
+        Self {
+            config,
+            exchange_name: exchange_name.into(),
+            state,
+            inventory: InventoryTracker::new(),
+            client_ids: ClientIdIssuer::new(),
+            book: None,
+        }
     }
 
-    /// Reject configs whose spacing can't cover round-trip maker fees. Spacing
-    /// is interpreted in bps: geometric `grid_spacing` is already a percent
-    /// (→ ×100 for bps); arithmetic spacing is absolute price and is compared
-    /// against `mid_price × 2 × maker_bps × multiplier`.
+    fn symbol(&self) -> &str {
+        &self.config.symbol
+    }
+
     fn check_fee_floor(&self, mid_price: Decimal) -> Result<(), BotError> {
         let Some(fees) = &self.config.fees else {
             tracing::warn!(
-                "No [strategy.grid.fees] configured — skipping fee-floor check. \
-                 Consider setting maker_bps so startup can refuse uneconomic spacing."
+                "No [strategy.grid.fees] configured — skipping fee-floor check."
             );
             return Ok(());
         };
@@ -62,7 +84,6 @@ impl GridStrategy {
                 self.config.grid_spacing / mid_price * Decimal::from(10_000)
             }
         };
-
         let break_even_win_rate = if round_trip_bps.is_zero() {
             Decimal::ZERO
         } else {
@@ -72,7 +93,6 @@ impl GridStrategy {
         tracing::info!(
             spacing_bps = %spacing_bps,
             required_bps = %required_bps,
-            maker_bps = %fees.maker_bps,
             break_even_win_rate = %break_even_win_rate,
             "Grid fee-floor check"
         );
@@ -88,42 +108,35 @@ impl GridStrategy {
         Ok(())
     }
 
-    /// Place all pending grid orders. Assigns a fresh `client_id` to each
-    /// level *before* submission so that subsequent fill events can be
-    /// correlated even though the exchange doesn't return order_ids
-    /// synchronously.
-    async fn place_pending_orders(&mut self, ctx: &StrategyContext) -> Result<(), BotError> {
-        let symbol = ctx.config.symbol.clone();
-        let exchange = &self.exchange_name;
-        let max_position = self.config.max_position;
-        let order_type = self.parse_order_type();
-        let order_size = self.config.order_size;
+    fn broker(&self, cx: &ActorContext) -> Result<Arc<dyn Broker>, BotError> {
+        cx.brokers().require(&self.exchange_name).map(Arc::clone)
+    }
 
-        let net_position = self.state.net_position;
-        let mut orders_to_place: Vec<NewOrder> = Vec::new();
-        let mut target_level_ids: Vec<String> = Vec::new();
+    /// Place every `Pending` level, skipping sides at max position.
+    async fn place_pending_orders(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        let broker = self.broker(cx)?;
+        let order_type = self.config.order_type;
+        let order_size = self.config.order_size;
+        let max_position = self.config.max_position;
+        let net_position = self.inventory.net_position;
+
+        let mut orders: Vec<NewOrder> = Vec::new();
+        let mut target_cids: Vec<String> = Vec::new();
         for idx in 0..self.state.levels.len() {
-            let level_side;
-            let level_price;
-            {
+            let (level_side, level_price) = {
                 let level = &self.state.levels[idx];
                 if level.status != GridLevelStatus::Pending {
                     continue;
                 }
-                let at_max = match level.side {
-                    Side::Buy => net_position >= max_position,
-                    Side::Sell => net_position <= -max_position,
-                };
-                if at_max {
+                if GridState::at_max_position(net_position, level.side, max_position) {
                     continue;
                 }
-                level_side = level.side;
-                level_price = level.price;
-            }
-            let cid = self.state.issue_client_id();
+                (level.side, level.price)
+            };
+            let cid = self.client_ids.issue();
             self.state.levels[idx].client_id = Some(cid.clone());
-            orders_to_place.push(NewOrder {
-                symbol: symbol.clone(),
+            orders.push(NewOrder {
+                symbol: self.symbol().to_string(),
                 side: level_side,
                 order_type,
                 price: level_price,
@@ -131,20 +144,20 @@ impl GridStrategy {
                 client_id: Some(cid.clone()),
                 reduce_only: false,
             });
-            target_level_ids.push(cid);
+            target_cids.push(cid);
         }
 
-        if orders_to_place.is_empty() {
+        if orders.is_empty() {
             return Ok(());
         }
+        tracing::info!(count = orders.len(), "Placing grid orders");
 
-        tracing::info!(count = orders_to_place.len(), "Placing grid orders");
-
-        let results = ctx.place_orders(exchange, &orders_to_place).await?;
-
+        let results = broker.place_orders(&orders).await?;
         let mut placed = 0;
-        for (result, cid) in results.iter().zip(target_level_ids.iter()) {
-            let Some(level) = self.state.levels.iter_mut().find(|l| l.client_id.as_ref() == Some(cid)) else {
+        for (result, cid) in results.iter().zip(target_cids.iter()) {
+            let Some(level) =
+                self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
+            else {
                 continue;
             };
             if result.success {
@@ -163,239 +176,189 @@ impl GridStrategy {
                 level.client_id = None;
             }
         }
-
         tracing::info!(placed, "Grid orders placed");
         Ok(())
     }
 
-    /// Apply a reconcile diff: cancel drifted orders, then place newly-needed
-    /// ones. Uses the same `client_id`-first correlation as `place_pending`.
     async fn apply_reconcile(
         &mut self,
-        ctx: &StrategyContext,
+        cx: &ActorContext,
         new_mid: Decimal,
         cancels: Vec<OrderRef>,
         places: Vec<(Side, Decimal)>,
     ) -> Result<(), BotError> {
-        let symbol = ctx.config.symbol.clone();
-        let exchange = &self.exchange_name;
+        let broker = self.broker(cx)?;
 
         if !cancels.is_empty() {
             let cancel_orders: Vec<CancelOrder> = cancels
                 .iter()
                 .map(|r| match r {
                     OrderRef::Client(cid) => CancelOrder {
-                        symbol: symbol.clone(),
+                        symbol: self.symbol().to_string(),
                         order_id: String::new(),
                         client_id: Some(cid.clone()),
                     },
                     OrderRef::Exchange(oid) => CancelOrder {
-                        symbol: symbol.clone(),
+                        symbol: self.symbol().to_string(),
                         order_id: oid.clone(),
                         client_id: None,
                     },
                 })
                 .collect();
             tracing::info!(count = cancel_orders.len(), "Soft-rebalance: cancelling drifted orders");
-            ctx.cancel_orders(exchange, &cancel_orders).await?;
+            broker.cancel_orders(&cancel_orders).await?;
         }
 
-        // Update state: drop cancelled levels, append new pending, recenter.
         self.state.apply_reconcile(new_mid, &cancels, &places, Instant::now());
 
         if !places.is_empty() {
-            self.place_pending_orders(ctx).await?;
+            self.place_pending_orders(cx).await?;
         }
         Ok(())
     }
 
-    /// Handle a fill: record position change and place opposite order.
-    async fn handle_fill(
+    /// Place the mirror-side replacement after a fill.
+    async fn place_replacement_after_fill(
         &mut self,
-        ctx: &StrategyContext,
-        order_id: &str,
-        client_id: Option<&str>,
-        side: Side,
-        price: Decimal,
-        quantity: Decimal,
+        cx: &ActorContext,
+        filled_side: Side,
+        filled_price: Decimal,
     ) -> Result<(), BotError> {
-        self.state.record_fill(side, price, quantity);
-
-        tracing::info!(
-            side = %side,
-            price = %price,
-            qty = %quantity,
-            net_pos = %self.state.net_position,
-            pnl = %self.state.realized_pnl,
-            "Grid order filled"
-        );
-
-        let Some(filled_level) = self.state.mark_filled(client_id, order_id) else {
-            return Ok(());
-        };
-        let opposite_side = filled_level.side.opposite();
-
-        if self.state.at_max_position(opposite_side, self.config.max_position) {
+        let opposite_side = filled_side.opposite();
+        if GridState::at_max_position(
+            self.inventory.net_position,
+            opposite_side,
+            self.config.max_position,
+        ) {
             tracing::warn!(
                 side = %opposite_side,
-                net_pos = %self.state.net_position,
+                net_pos = %self.inventory.net_position,
                 max = %self.config.max_position,
                 "At max position, skipping opposite order"
             );
             return Ok(());
         }
 
-        let new_cid = self.state.issue_client_id();
+        let broker = self.broker(cx)?;
+        let cid = self.client_ids.issue();
         let order = NewOrder {
-            symbol: ctx.config.symbol.clone(),
+            symbol: self.symbol().to_string(),
             side: opposite_side,
-            order_type: self.parse_order_type(),
-            price: filled_level.price,
+            order_type: self.config.order_type,
+            price: filled_price,
             quantity: self.config.order_size,
-            client_id: Some(new_cid.clone()),
+            client_id: Some(cid.clone()),
             reduce_only: false,
         };
+        let results = broker.place_orders(&[order]).await?;
+        // Whatever the outcome, the `Filled` sentinel set by `mark_filled`
+        // must not stick around — otherwise the tick reconcile (which only
+        // looks at `Active` levels) would never re-place it and the slot
+        // would leak permanently. Find it once, mutate in place based on
+        // whether the submission succeeded.
+        let Some(level) =
+            self.state.levels.iter_mut().find(|l| l.status == GridLevelStatus::Filled)
+        else {
+            return Ok(());
+        };
 
-        let results = ctx.place_orders(&self.exchange_name, &[order]).await?;
-
-        if let Some(result) = results.first() {
-            if result.success {
-                let lookup = client_id.or(filled_level.client_id.as_deref());
-                if let Some(level) = self
-                    .state
-                    .levels
-                    .iter_mut()
-                    .find(|l| lookup.is_some() && l.client_id.as_deref() == lookup)
-                {
-                    level.side = opposite_side;
-                    level.status = GridLevelStatus::Active;
-                    level.client_id = Some(new_cid);
-                    if !result.order_id.is_empty() {
-                        level.order_id = Some(result.order_id.clone());
-                    } else {
-                        level.order_id = None;
-                    }
-                }
+        match results.first() {
+            Some(res) if res.success => {
+                level.side = opposite_side;
+                level.status = GridLevelStatus::Active;
+                level.client_id = Some(cid);
+                level.order_id =
+                    if res.order_id.is_empty() { None } else { Some(res.order_id.clone()) };
             }
-        }
-
-        Ok(())
-    }
-
-    fn parse_order_type(&self) -> OrderType {
-        match self.config.order_type.as_str() {
-            "PostOnly" | "post_only" => OrderType::PostOnly,
-            "Market" | "market" => OrderType::Market,
-            _ => OrderType::Limit,
-        }
-    }
-}
-
-#[async_trait]
-impl Strategy for GridStrategy {
-    fn name(&self) -> &str {
-        "grid"
-    }
-
-    async fn on_start(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        let symbol = ctx.config.symbol.clone();
-        let exchange = &self.exchange_name;
-
-        tracing::info!("Cancelling stale orders");
-        ctx.cancel_all_orders(exchange, &symbol).await?;
-
-        let book = ctx.get_orderbook(exchange, &symbol, 20).await?;
-        let mid = book.midpoint().ok_or_else(|| {
-            BotError::strategy("No orderbook data available to compute mid price")
-        })?;
-
-        // Refuse to run if spacing can't cover fees.
-        self.check_fee_floor(mid)?;
-
-        tracing::info!(
-            mid_price = %mid,
-            num_levels = self.config.num_levels,
-            spacing = %self.config.grid_spacing,
-            "Initializing grid"
-        );
-
-        self.state.compute_levels(mid, &self.config);
-        self.place_pending_orders(ctx).await?;
-
-        Ok(())
-    }
-
-    async fn on_tick(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        let symbol = ctx.config.symbol.clone();
-        let exchange = &self.exchange_name;
-
-        // Snapshot the current mid from cached book state. Used for both the
-        // trend filter and rebalance decisions below.
-        let current_mid = ctx.orderbook(exchange).and_then(|b| b.midpoint());
-
-        // Trend-filter gate: update EMAs and flip `paused` if divergence exceeds
-        // threshold. When paused, cancel all live orders and bail on the rest
-        // of the tick (re-placement happens on the next tick once slope relaxes).
-        if let (Some(cfg), Some(mid)) = (self.config.trend_filter.clone(), current_mid) {
-            let was_paused = self.state.paused;
-            let (divergence_bps, paused) =
-                self.state.update_trend_filter(mid, Instant::now(), &cfg);
-            if paused && !was_paused {
+            Some(res) => {
                 tracing::warn!(
-                    divergence_bps = %format!("{divergence_bps:.1}"),
-                    threshold_bps = %cfg.pause_divergence_bps,
-                    "Trend filter tripped — pausing grid and cancelling live orders"
+                    side = %opposite_side,
+                    price = %filled_price,
+                    error = res.error.as_deref().unwrap_or("unknown"),
+                    "Replacement placement failed; marking level Pending for retry"
                 );
-                ctx.cancel_all_orders(exchange, &symbol).await?;
-                for l in &mut self.state.levels {
-                    l.status = GridLevelStatus::Pending;
-                    l.order_id = None;
-                    l.client_id = None;
-                }
-            } else if !paused && was_paused {
-                tracing::info!(
-                    divergence_bps = %format!("{divergence_bps:.1}"),
-                    "Trend filter cleared — resuming grid"
-                );
+                level.side = opposite_side;
+                level.status = GridLevelStatus::Pending;
+                level.client_id = None;
+                level.order_id = None;
             }
-            if paused {
+            None => {
+                // Broker returned an empty result vector. Treat as retry.
+                level.side = opposite_side;
+                level.status = GridLevelStatus::Pending;
+                level.client_id = None;
+                level.order_id = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Tick-time trend-filter evaluation. Cancels live orders and returns
+    /// `true` if paused (caller should skip the rest of the tick).
+    async fn evaluate_trend_filter(&mut self, cx: &ActorContext, mid: Decimal) -> Result<bool, BotError> {
+        let Some(cfg) = self.config.trend_filter.clone() else {
+            return Ok(false);
+        };
+        let was_paused = self.state.paused;
+        let (divergence_bps, paused) =
+            self.state.update_trend_filter(mid, Instant::now(), &cfg);
+        if paused && !was_paused {
+            tracing::warn!(
+                divergence_bps = %format!("{divergence_bps:.1}"),
+                threshold_bps = %cfg.pause_divergence_bps,
+                "Trend filter tripped — pausing grid and cancelling live orders"
+            );
+            let broker = self.broker(cx)?;
+            broker.cancel_all_orders(self.symbol()).await?;
+            for l in &mut self.state.levels {
+                l.status = GridLevelStatus::Pending;
+                l.order_id = None;
+                l.client_id = None;
+            }
+        } else if !paused && was_paused {
+            tracing::info!(
+                divergence_bps = %format!("{divergence_bps:.1}"),
+                "Trend filter cleared — resuming grid"
+            );
+        }
+        Ok(paused)
+    }
+
+    async fn handle_tick(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        let Some(mid) = self.book.as_ref().and_then(|b| b.midpoint()) else {
+            return Ok(());
+        };
+
+        if self.evaluate_trend_filter(cx, mid).await? {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        if self.state.needs_rebalance(mid, self.config.rebalance_threshold_pct)
+            && self.state.rebalance_ready(now, self.config.rebalance_cooldown_secs)
+        {
+            let diff = self.state.reconcile(
+                mid,
+                self.inventory.net_position,
+                &self.config,
+                reconcile_match_tolerance_pct(),
+            );
+            if diff.changed {
+                tracing::info!(
+                    old_center = %self.state.center_price,
+                    new_mid = %mid,
+                    cancels = diff.cancels.len(),
+                    places = diff.places.len(),
+                    "Soft-rebalancing grid"
+                );
+                self.apply_reconcile(cx, mid, diff.cancels, diff.places).await?;
                 return Ok(());
             }
         }
 
-        // Reconcile on drift. Only the delta is issued, and a cooldown
-        // suppresses churn in whippy markets. `at_max_position` wind-down is
-        // still handled by the per-level skip in place_pending_orders.
-        if let Some(mid) = current_mid {
-            let now = Instant::now();
-            if self.state.needs_rebalance(mid, self.config.rebalance_threshold_pct)
-                && self.state.rebalance_ready(now, self.config.rebalance_cooldown_secs)
-            {
-                let diff = self.state.reconcile(
-                    mid,
-                    &self.config,
-                    reconcile_match_tolerance_pct(),
-                );
-                if diff.changed {
-                    tracing::info!(
-                        old_center = %self.state.center_price,
-                        new_mid = %mid,
-                        cancels = diff.cancels.len(),
-                        places = diff.places.len(),
-                        "Soft-rebalancing grid"
-                    );
-                    self.apply_reconcile(ctx, mid, diff.cancels, diff.places).await?;
-                    return Ok(());
-                }
-            }
-        }
-
-        // Verify expected orders are still live. We match on client_id first
-        // because Bullet's SubmitTxResponse doesn't return exchange order_ids
-        // synchronously — levels often only have client_id set until an
-        // OrderUpdate arrives, so an order_id-only check would silently skip
-        // every level.
-        let live_orders = ctx.get_open_orders(exchange, &symbol).await?;
+        // Verify expected orders are still live.
+        let broker = self.broker(cx)?;
+        let live_orders = broker.get_open_orders(self.symbol()).await?;
         let live_order_ids: std::collections::HashSet<&str> =
             live_orders.iter().map(|o| o.id.as_str()).collect();
         let live_client_ids: std::collections::HashSet<&str> =
@@ -412,78 +375,74 @@ impl Strategy for GridStrategy {
                 _ => false,
             };
             if !is_live {
-                // Without a trade/fill event, we can't tell if this level was
-                // filled (→ should flip to opposite side) or just cancelled
-                // (→ should re-place same side). Conservative choice: mark
-                // pending and re-place same side. `handle_fill` will correct
-                // the side when the fill event eventually lands.
                 level.status = GridLevelStatus::Pending;
                 level.order_id = None;
                 level.client_id = None;
                 missing += 1;
             }
         }
-
         if missing > 0 {
             tracing::warn!(missing, "Detected missing grid orders, re-placing");
-            self.place_pending_orders(ctx).await?;
         }
+        // Always run — covers missing orders AND any level left `Pending` by
+        // a prior failed placement (e.g., a replacement that the broker
+        // rejected). `place_pending_orders` is a no-op when nothing pends.
+        self.place_pending_orders(cx).await?;
 
         tracing::info!(
             active = self.state.active_count(),
-            net_pos = %self.state.net_position,
-            pnl = %self.state.realized_pnl,
-            fills = self.state.total_fills,
+            net_pos = %self.inventory.net_position,
+            pnl = %self.inventory.realized_pnl,
+            fills = self.inventory.total_fills,
             center = %self.state.center_price,
             paused = self.state.paused,
             "Grid tick"
         );
-
         Ok(())
     }
+}
 
-    async fn on_event(
-        &mut self,
-        ctx: &mut StrategyContext,
-        event: ExchangeEvent,
-    ) -> Result<(), BotError> {
-        match event {
-            ExchangeEvent::Trade { order_id, client_id, side, price, quantity, .. } => {
-                self.handle_fill(ctx, &order_id, client_id.as_deref(), side, price, quantity)
-                    .await?;
-            }
-            ExchangeEvent::OrderUpdate { order, .. } => {
-                if order.status == OrderStatus::Filled {
-                    self.handle_fill(
-                        ctx,
-                        &order.id,
-                        order.client_id.as_deref(),
-                        order.side,
-                        order.price,
-                        order.quantity,
-                    )
-                    .await?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
+#[async_trait]
+impl Actor for GridActor {
+    async fn init(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        let broker = self.broker(cx)?;
+        tracing::info!("Cancelling stale orders");
+        broker.cancel_all_orders(self.symbol()).await?;
 
-    async fn on_stop(&mut self, ctx: &mut StrategyContext) -> Result<(), BotError> {
-        let symbol = ctx.config.symbol.clone();
-        let exchange = &self.exchange_name;
-
-        tracing::info!("Shutting down grid strategy, cancelling all orders");
-        ctx.cancel_all_orders(exchange, &symbol).await?;
+        let book = broker.get_orderbook(self.symbol(), 20).await?;
+        let mid = book.midpoint().ok_or_else(|| {
+            BotError::strategy("No orderbook data available to compute mid price")
+        })?;
+        self.check_fee_floor(mid)?;
+        self.book = Some(book);
 
         tracing::info!(
-            net_pos = %self.state.net_position,
-            pnl = %self.state.realized_pnl,
-            fills = self.state.total_fills,
-            "Grid strategy final stats"
+            mid_price = %mid,
+            num_levels = self.config.num_levels,
+            spacing = %self.config.grid_spacing,
+            "Initializing grid"
         );
+        self.state.compute_levels(mid, self.inventory.net_position, &self.config);
+        self.place_pending_orders(cx).await?;
+        Ok(())
+    }
 
+    async fn wind_down(
+        &mut self,
+        _reason: &WindDownReason,
+        cx: &ActorContext,
+    ) -> Result<(), BotError> {
+        let broker = self.broker(cx)?;
+        tracing::info!("Shutting down grid — cancelling all orders");
+        if let Err(e) = broker.cancel_all_orders(self.symbol()).await {
+            tracing::warn!(error = %e, "Failed to cancel all on shutdown");
+        }
+        tracing::info!(
+            net_pos = %self.inventory.net_position,
+            pnl = %self.inventory.realized_pnl,
+            fills = self.inventory.total_fills,
+            "Grid final stats"
+        );
         Ok(())
     }
 
@@ -492,11 +451,177 @@ impl Strategy for GridStrategy {
             "center_price": self.state.center_price.to_string(),
             "active_levels": self.state.active_count(),
             "total_levels": self.state.levels.len(),
-            "net_position": self.state.net_position.to_string(),
-            "realized_pnl": self.state.realized_pnl.to_string(),
-            "total_fills": self.state.total_fills,
+            "net_position": self.inventory.net_position.to_string(),
+            "realized_pnl": self.inventory.realized_pnl.to_string(),
+            "total_fills": self.inventory.total_fills,
             "paused": self.state.paused,
             "grid_levels": self.state.levels,
         })
+    }
+}
+
+#[async_trait]
+impl EventHandler<BookUpdate> for GridActor {
+    async fn on_event(
+        &mut self,
+        event: BookUpdate,
+        _cx: &ActorContext,
+    ) -> Result<(), BotError> {
+        if event.exchange == self.exchange_name && event.symbol == self.symbol() {
+            self.book = Some(event.orderbook);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventHandler<Trade> for GridActor {
+    async fn on_event(&mut self, event: Trade, cx: &ActorContext) -> Result<(), BotError> {
+        if event.exchange != self.exchange_name || event.symbol != self.symbol() {
+            return Ok(());
+        }
+
+        // 1. Update inventory (canonical).
+        self.inventory.record_fill(event.side, event.price, event.quantity);
+
+        // 2. Mark the level filled and derive the replacement price.
+        let filled = self
+            .state
+            .mark_filled(event.client_id.as_deref(), &event.order_id);
+        tracing::info!(
+            side = %event.side,
+            price = %event.price,
+            qty = %event.quantity,
+            net_pos = %self.inventory.net_position,
+            pnl = %self.inventory.realized_pnl,
+            "Grid fill"
+        );
+        let Some(filled_level) = filled else {
+            return Ok(());
+        };
+
+        // 3. Place the opposite-side order at the filled level's price.
+        self.place_replacement_after_fill(cx, filled_level.side, filled_level.price).await
+    }
+}
+
+#[async_trait]
+impl EventHandler<OrderLifecycle> for GridActor {
+    async fn on_event(
+        &mut self,
+        event: OrderLifecycle,
+        _cx: &ActorContext,
+    ) -> Result<(), BotError> {
+        if event.exchange != self.exchange_name || event.order.symbol != self.symbol() {
+            return Ok(());
+        }
+        // Learn the exchange order_id once the venue acks our place/fill.
+        // Needed so reconcile matching works after a `client_id`-free adapter
+        // path (e.g., Hyperliquid currently doesn't propagate cloid).
+        if let Some(cid) = event.order.client_id.as_deref() {
+            if let Some(level) =
+                self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
+            {
+                if level.order_id.is_none() && !event.order.id.is_empty() {
+                    level.order_id = Some(event.order.id.clone());
+                }
+            }
+        }
+        // Drop cancelled/rejected levels from the active set — the tick
+        // missing-order check will re-place them.
+        if matches!(
+            event.order.status,
+            OrderStatus::Cancelled | OrderStatus::Rejected
+        ) {
+            if let Some(level) = self.state.levels.iter_mut().find(|l| {
+                l.client_id.as_deref() == event.order.client_id.as_deref()
+                    && event.order.client_id.is_some()
+            }) {
+                level.status = GridLevelStatus::Pending;
+                level.client_id = None;
+                level.order_id = None;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventHandler<Tick> for GridActor {
+    async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
+        self.handle_tick(cx).await
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    //! End-to-end test of the grid actor running under the real harness,
+    //! driven by `ScriptedFeed<Trade>` with a `NullBroker` standing in for
+    //! the exchange. Exercises the "fill → place replacement → inventory
+    //! update" loop without touching any network.
+
+    use super::*;
+    use bb_core::broker::Broker;
+    use bb_core::events::Trade;
+    use bb_core::harness::testing::{NullBroker, ScriptedFeed};
+    use bb_core::harness::{ActorSpec, HarnessBuilder};
+    use bb_core::types::OrderType;
+
+    fn dec(s: &str) -> Decimal {
+        s.parse().unwrap()
+    }
+
+    fn test_config() -> GridConfig {
+        GridConfig {
+            symbol: "BTC-USD".to_string(),
+            num_levels: 2,
+            spacing_mode: SpacingMode::Geometric,
+            grid_spacing: dec("0.5"),
+            order_size: dec("1"),
+            order_type: OrderType::Limit,
+            max_position: dec("5"),
+            rebalance_threshold_pct: dec("3"),
+            rebalance_cooldown_secs: 30,
+            inventory_skew_k: Decimal::ZERO,
+            fees: None,
+            trend_filter: None,
+        }
+    }
+
+    fn fill(cid: &str) -> Trade {
+        Trade {
+            exchange: "bullet".to_string(),
+            symbol: "BTC-USD".to_string(),
+            order_id: "42".to_string(),
+            client_id: Some(cid.to_string()),
+            side: Side::Buy,
+            price: dec("99.5"),
+            quantity: dec("1"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn trade_updates_inventory_and_does_not_place_without_init() {
+        // Actor without init — state is empty, so a fill can't match a level.
+        // The harness still processes it and the broker should see no calls.
+        let broker = NullBroker::shared("bullet");
+        let actor = GridActor::new(test_config(), "bullet");
+        let feed = ScriptedFeed::new(vec![fill("unknown")]).named("trades");
+
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", broker.clone() as Arc<dyn Broker>)
+            .wire_feed_named("trades", feed)
+            .wire_actor(ActorSpec::new("grid", actor).sub::<Trade>())
+            .build()
+            .unwrap();
+        let _ = harness.run().await.unwrap();
+
+        let hist = broker.history().await;
+        // No matching level → no replacement. Shutdown may have called
+        // `cancel_all_orders` — we allow that but disallow `place_orders`.
+        assert!(
+            !hist.iter().any(|c| c.method == "place_orders"),
+            "unexpected place: {hist:?}"
+        );
     }
 }

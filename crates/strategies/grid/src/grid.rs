@@ -32,16 +32,16 @@ pub struct GridLevel {
     pub status: GridLevelStatus,
 }
 
-/// Manages the set of grid levels and position tracking.
+/// Manages the set of grid levels and associated trend-filter state.
+///
+/// Position / PnL / client-id tracking deliberately live in shared helpers
+/// (`InventoryTracker`, `ClientIdIssuer`) owned by the actor rather than here,
+/// so grid logic stays focused on geometry + reconcile and those facilities
+/// can be reused by every strategy.
 #[derive(Debug)]
 pub struct GridState {
     pub levels: Vec<GridLevel>,
     pub center_price: Decimal,
-    pub net_position: Decimal,
-    pub realized_pnl: Decimal,
-    pub total_fills: u64,
-    /// Monotonic counter for `ClientOrderId` assignment; never reused.
-    next_client_id: u64,
     /// Last time a full compute_levels / reconcile mutated the level set.
     last_rebalance_at: Option<Instant>,
     /// Trend-filter EMAs (enabled only if config sets `trend_filter`).
@@ -69,20 +69,22 @@ pub enum OrderRef {
     Exchange(String),
 }
 
-impl GridState {
-    pub fn new() -> Self {
+impl Default for GridState {
+    fn default() -> Self {
         Self {
             levels: Vec::new(),
             center_price: Decimal::ZERO,
-            net_position: Decimal::ZERO,
-            realized_pnl: Decimal::ZERO,
-            total_fills: 0,
-            next_client_id: 1,
             last_rebalance_at: None,
             fast_ema: None,
             slow_ema: None,
             paused: false,
         }
+    }
+}
+
+impl GridState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Enable trend-filter EMAs at construction time.
@@ -92,20 +94,18 @@ impl GridState {
         self
     }
 
-    /// Issue a fresh `ClientOrderId` as a decimal-encoded string.
-    pub fn issue_client_id(&mut self) -> String {
-        let id = self.next_client_id;
-        self.next_client_id += 1;
-        id.to_string()
-    }
-
     /// Compute the desired set of (side, price) levels for a given mid, applying
     /// inventory skew but not mutating state. Used by both `compute_levels` and
     /// `reconcile` so the geometry is defined in one place.
-    pub fn desired_levels(&self, mid_price: Decimal, config: &GridConfig) -> Vec<(Side, Decimal)> {
+    pub fn desired_levels(
+        &self,
+        mid_price: Decimal,
+        net_position: Decimal,
+        config: &GridConfig,
+    ) -> Vec<(Side, Decimal)> {
         let mut out = Vec::with_capacity(config.num_levels * 2);
         let (buy_mult, sell_mult) = skew_multipliers(
-            self.net_position,
+            net_position,
             config.max_position,
             config.inventory_skew_k,
         );
@@ -132,8 +132,13 @@ impl GridState {
 
     /// Compute grid levels centered on `mid_price` and reset the level set.
     /// Used on startup; tick-time updates should prefer `reconcile`.
-    pub fn compute_levels(&mut self, mid_price: Decimal, config: &GridConfig) {
-        let desired = self.desired_levels(mid_price, config);
+    pub fn compute_levels(
+        &mut self,
+        mid_price: Decimal,
+        net_position: Decimal,
+        config: &GridConfig,
+    ) {
+        let desired = self.desired_levels(mid_price, net_position, config);
         self.levels.clear();
         self.center_price = mid_price;
         for (side, price) in desired {
@@ -154,10 +159,11 @@ impl GridState {
     pub fn reconcile(
         &self,
         new_mid: Decimal,
+        net_position: Decimal,
         config: &GridConfig,
         match_tolerance_pct: Decimal,
     ) -> ReconcileDiff {
-        let desired = self.desired_levels(new_mid, config);
+        let desired = self.desired_levels(new_mid, net_position, config);
         let mut diff = ReconcileDiff::default();
 
         // Track which desired slots are already covered.
@@ -227,8 +233,14 @@ impl GridState {
             })
             .collect();
         self.levels.retain(|l| {
-            let by_cid = l.client_id.as_deref().map_or(false, |c| cancelled_client.contains(c));
-            let by_oid = l.order_id.as_deref().map_or(false, |o| cancelled_exchange.contains(o));
+            let by_cid = l
+                .client_id
+                .as_deref()
+                .is_some_and(|c| cancelled_client.contains(c));
+            let by_oid = l
+                .order_id
+                .as_deref()
+                .is_some_and(|o| cancelled_exchange.contains(o));
             !(by_cid || by_oid)
         });
         for (side, price) in new_pending {
@@ -287,22 +299,6 @@ impl GridState {
         (divergence_bps, self.paused)
     }
 
-    /// Record a fill and update position tracking.
-    pub fn record_fill(&mut self, side: Side, price: Decimal, quantity: Decimal) {
-        match side {
-            Side::Buy => self.net_position += quantity,
-            Side::Sell => self.net_position -= quantity,
-        }
-        // Rough realized PnL tracking: for a sell, profit = (sell_price - center) * qty
-        // For a buy, profit = (center - buy_price) * qty
-        let profit = match side {
-            Side::Buy => (self.center_price - price) * quantity,
-            Side::Sell => (price - self.center_price) * quantity,
-        };
-        self.realized_pnl += profit;
-        self.total_fills += 1;
-    }
-
     /// Find a grid level by client_id or exchange order_id and mark it as
     /// filled. `client_id` is checked first because we can always assign one
     /// before placement, whereas `order_id` depends on a later `OrderUpdate`
@@ -312,18 +308,18 @@ impl GridState {
         client_id: Option<&str>,
         order_id: &str,
     ) -> Option<GridLevel> {
-        let level = self.levels.iter_mut().find(|l| match client_id {
-            Some(cid) => l.client_id.as_deref() == Some(cid),
-            None => l.order_id.as_deref() == Some(order_id),
+        let level = self.levels.iter_mut().find(|l| {
+            if l.status == GridLevelStatus::Filled {
+                return false;
+            }
+            match client_id {
+                Some(cid) => l.client_id.as_deref() == Some(cid),
+                None => l.order_id.as_deref() == Some(order_id),
+            }
         })?;
         level.status = GridLevelStatus::Filled;
         let filled = level.clone();
         Some(filled)
-    }
-
-    /// Get all levels that need orders placed.
-    pub fn pending_levels(&self) -> Vec<&GridLevel> {
-        self.levels.iter().filter(|l| l.status == GridLevelStatus::Pending).collect()
     }
 
     /// Count active (live) orders.
@@ -331,20 +327,11 @@ impl GridState {
         self.levels.iter().filter(|l| l.status == GridLevelStatus::Active).count()
     }
 
-    /// Check if we're at max position for a given side.
-    pub fn at_max_position(&self, side: Side, max_position: Decimal) -> bool {
+    /// Check if we're at max position for a given side given a live `net_position`.
+    pub fn at_max_position(net_position: Decimal, side: Side, max_position: Decimal) -> bool {
         match side {
-            Side::Buy => self.net_position >= max_position,
-            Side::Sell => self.net_position <= -max_position,
-        }
-    }
-
-    /// Reset all levels to pending (for rebalance).
-    pub fn reset_levels(&mut self) {
-        for level in &mut self.levels {
-            level.order_id = None;
-            level.client_id = None;
-            level.status = GridLevelStatus::Pending;
+            Side::Buy => net_position >= max_position,
+            Side::Sell => net_position <= -max_position,
         }
     }
 }
@@ -382,11 +369,12 @@ mod tests {
 
     fn test_config() -> GridConfig {
         GridConfig {
+            symbol: "BTC-USD".to_string(),
             num_levels: 3,
             spacing_mode: SpacingMode::Geometric,
             grid_spacing: Decimal::from(1), // 1%
             order_size: Decimal::ONE,
-            order_type: "PostOnly".to_string(),
+            order_type: bb_core::types::OrderType::PostOnly,
             max_position: Decimal::from(5),
             rebalance_threshold_pct: Decimal::from(3),
             rebalance_cooldown_secs: 30,
@@ -400,7 +388,7 @@ mod tests {
     fn compute_geometric_levels() {
         let mut state = GridState::new();
         let config = test_config();
-        state.compute_levels(Decimal::from(100), &config);
+        state.compute_levels(Decimal::from(100), Decimal::ZERO, &config);
 
         assert_eq!(state.levels.len(), 6); // 3 buy + 3 sell
         assert_eq!(state.center_price, Decimal::from(100));
@@ -427,7 +415,7 @@ mod tests {
             ..test_config()
         };
         let mut state = GridState::new();
-        state.compute_levels(Decimal::from(100), &config);
+        state.compute_levels(Decimal::from(100), Decimal::ZERO, &config);
 
         let buys: Vec<Decimal> =
             state.levels.iter().filter(|l| l.side == Side::Buy).map(|l| l.price).collect();
@@ -446,27 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn position_tracking() {
-        let mut state = GridState::new();
-        state.center_price = Decimal::from(100);
-
-        state.record_fill(Side::Buy, Decimal::from(99), Decimal::ONE);
-        assert_eq!(state.net_position, Decimal::ONE);
-        assert_eq!(state.total_fills, 1);
-
-        state.record_fill(Side::Sell, Decimal::from(101), Decimal::ONE);
-        assert_eq!(state.net_position, Decimal::ZERO);
-        assert_eq!(state.total_fills, 2);
-        assert_eq!(state.realized_pnl, Decimal::from(2));
-    }
-
-    #[test]
     fn max_position_check() {
-        let mut state = GridState::new();
-        state.net_position = Decimal::from(5);
-
-        assert!(state.at_max_position(Side::Buy, Decimal::from(5)));
-        assert!(!state.at_max_position(Side::Sell, Decimal::from(5)));
+        let pos = Decimal::from(5);
+        assert!(GridState::at_max_position(pos, Side::Buy, Decimal::from(5)));
+        assert!(!GridState::at_max_position(pos, Side::Sell, Decimal::from(5)));
     }
 
     #[test]
@@ -476,12 +447,12 @@ mod tests {
             inventory_skew_k: Decimal::new(4, 1), // 0.4
             ..test_config()
         };
-        let mut state = GridState::new();
-        state.net_position = Decimal::new(25, 1); // 2.5
+        let state = GridState::new();
+        let net_position = Decimal::new(25, 1); // 2.5
 
         // Baseline: zero skew at zero position.
-        let baseline = GridState::new().desired_levels(Decimal::from(100), &config);
-        let skewed = state.desired_levels(Decimal::from(100), &config);
+        let baseline = state.desired_levels(Decimal::from(100), Decimal::ZERO, &config);
+        let skewed = state.desired_levels(Decimal::from(100), net_position, &config);
 
         let baseline_buy =
             baseline.iter().find(|(s, _)| *s == Side::Buy).map(|(_, p)| *p).unwrap();
@@ -509,15 +480,15 @@ mod tests {
     fn reconcile_identity_when_no_drift() {
         let config = test_config();
         let mut state = GridState::new();
-        state.compute_levels(Decimal::from(100), &config);
+        state.compute_levels(Decimal::from(100), Decimal::ZERO, &config);
         // Mark all levels as Active with client_ids so they look like live orders.
-        for l in &mut state.levels {
-            l.client_id = Some(state.next_client_id.to_string());
-            state.next_client_id += 1;
+        for (i, l) in state.levels.iter_mut().enumerate() {
+            l.client_id = Some((i + 1).to_string());
             l.status = GridLevelStatus::Active;
         }
 
-        let diff = state.reconcile(Decimal::from(100), &config, Decimal::new(1, 2)); // 0.01%
+        let diff =
+            state.reconcile(Decimal::from(100), Decimal::ZERO, &config, Decimal::new(1, 2));
         assert!(!diff.changed, "no drift → no diff");
         assert!(diff.cancels.is_empty());
         assert!(diff.places.is_empty());
@@ -531,11 +502,9 @@ mod tests {
             ..test_config()
         };
         let mut state = GridState::new();
-        state.compute_levels(Decimal::from(100), &config);
-        // Activate.
-        for l in &mut state.levels {
-            l.client_id = Some(state.next_client_id.to_string());
-            state.next_client_id += 1;
+        state.compute_levels(Decimal::from(100), Decimal::ZERO, &config);
+        for (i, l) in state.levels.iter_mut().enumerate() {
+            l.client_id = Some((i + 1).to_string());
             l.status = GridLevelStatus::Active;
         }
 
@@ -543,9 +512,8 @@ mod tests {
         // be replaced. Matching tolerance is 0.05% so no old level matches a
         // new desired price.
         let new_mid = Decimal::new(1002, 1); // 100.2
-        let diff = state.reconcile(new_mid, &config, Decimal::new(5, 2));
+        let diff = state.reconcile(new_mid, Decimal::ZERO, &config, Decimal::new(5, 2));
         assert!(diff.changed);
-        // 4 active levels all drifted → 4 cancels and 4 places.
         assert_eq!(diff.cancels.len(), 4);
         assert_eq!(diff.places.len(), 4);
     }
