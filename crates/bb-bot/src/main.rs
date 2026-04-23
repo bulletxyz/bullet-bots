@@ -13,11 +13,13 @@ use bb_core::config::EngineConfig;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{ActorSpec, HarnessBuilder};
 use bb_core::helpers::TickFeed;
+use bb_exchange_binance::{ReferencePriceUpdate, connect_binance};
 use bb_exchange_bullet::{BulletConfig, connect_bullet};
 use bb_exchange_hyperliquid::{HyperliquidConfig, connect_hyperliquid};
 use bb_strategy_avellaneda_stoikov::{AvellanedaStoikovActor, AvellanedaStoikovConfig};
 use bb_strategy_funding_arb::{FundingArbActor, FundingArbConfig};
 use bb_strategy_grid::{GridActor, GridConfig};
+use bb_strategy_reference_arb::{ReferenceArbActor, ReferenceArbConfig};
 use bullet_rust_sdk::types::bullet_exchange_interface;
 use bullet_rust_sdk::{
     CallMessage, Client, Keypair, Network, PositiveDecimal, Transaction, UserAction,
@@ -272,11 +274,46 @@ async fn run_funding_arb(config: AppConfig) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let bullet_cfg: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
+    let arb_cfg: ReferenceArbConfig = sub_strategy(&config.strategy, "reference-arb")?;
+
+    let (broker, feeds) = connect_bullet(&bullet_cfg, &arb_cfg.symbol).await?;
+    let broker: Arc<dyn Broker> = Arc::new(broker);
+
+    let ref_feed = connect_binance(&arb_cfg.binance_symbol);
+    let actor = ReferenceArbActor::new(arb_cfg);
+    let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
+
+    let harness = HarnessBuilder::new()
+        .enable_signal_shutdown()
+        .with_status_port(config.engine.status_port)
+        .wire_broker("bullet", broker)
+        .wire_feed_named("bullet-trades", feeds.trade)
+        .wire_feed_named("bullet-book", feeds.book)
+        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
+        .wire_feed_named("binance-ref", ref_feed)
+        .wire_feed_named("ticks", tick)
+        .wire_actor(
+            ActorSpec::new("reference-arb", actor)
+                .sub::<BookUpdate>()
+                .sub::<ReferencePriceUpdate>()
+                .sub::<Trade>()
+                .sub::<OrderLifecycle>()
+                .sub::<Tick>(),
+        )
+        .build()?;
+    let reason = harness.run().await?;
+    tracing::info!(?reason, "Harness wound down");
+    Ok(())
+}
+
 async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     match config.strategy.strategy_type.as_str() {
         "grid" => run_grid(config).await,
         "avellaneda-stoikov" => run_avellaneda_stoikov(config).await,
         "funding-arb" => run_funding_arb(config).await,
+        "reference-arb" => run_reference_arb(config).await,
         other => Err(format!("Unknown strategy type: {other}").into()),
     }
 }
@@ -299,6 +336,12 @@ fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
             let _: HyperliquidConfig = parse_exchange_config(&config.exchanges, "hyperliquid")?;
             let _: FundingArbConfig = sub_strategy(&config.strategy, "funding-arb")?;
+        }
+        "reference-arb" => {
+            let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
+            let cfg: ReferenceArbConfig = sub_strategy(&config.strategy, "reference-arb")?;
+            cfg.validate()
+                .map_err(|e| format!("reference-arb config invalid: {e}"))?;
         }
         other => return Err(format!("Unknown strategy type: {other}").into()),
     }

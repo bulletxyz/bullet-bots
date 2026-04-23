@@ -19,6 +19,8 @@ bb-exchange-hyperliquid = { workspace = true }
 bb-strategy-grid = { workspace = true }
 bb-strategy-funding-arb = { workspace = true }
 bb-strategy-avellaneda-stoikov = { workspace = true }
+bb-strategy-reference-arb = { workspace = true }
+bb-exchange-binance = { workspace = true }
 bullet-rust-sdk = { workspace = true }
 rust_decimal = { workspace = true }
 tokio = { workspace = true }
