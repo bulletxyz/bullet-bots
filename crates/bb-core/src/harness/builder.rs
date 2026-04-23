@@ -140,11 +140,23 @@ impl<A: Actor> SubscriptionFactory<A> {
                                 Ok(event) => {
                                     let mut guard = actor.lock().await;
                                     if let Err(e) = guard.on_event(event, &ctx).await {
-                                        tracing::error!(
-                                            actor = ctx.actor_name(),
-                                            error = %e,
-                                            "handler returned error"
-                                        );
+                                        // Severity follows the error's own policy:
+                                        //   retryable → WARN (transient, next event retries)
+                                        //   otherwise → ERROR (real problem worth attention)
+                                        // Fatal errors additionally request shutdown.
+                                        if e.is_retryable() {
+                                            tracing::warn!(
+                                                actor = ctx.actor_name(),
+                                                error = %e,
+                                                "handler returned retryable error"
+                                            );
+                                        } else {
+                                            tracing::error!(
+                                                actor = ctx.actor_name(),
+                                                error = %e,
+                                                "handler returned error"
+                                            );
+                                        }
                                         if e.is_fatal() {
                                             ctx.request_shutdown();
                                             break;
