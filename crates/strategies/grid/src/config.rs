@@ -94,7 +94,14 @@ fn default_slow_secs() -> u64 {
 
 impl GridConfig {
     /// Absolute spacing between adjacent levels (in quote-asset price units).
+    ///
+    /// Callers are expected to have already run [`Self::validate`] at
+    /// startup — `debug_assert`s enforce the invariant in development and
+    /// panic at the call site rather than returning a nonsense value that
+    /// propagates silently. In release builds, a misconfigured grid
+    /// produces a well-defined (but useless) spacing of zero.
     pub fn spacing(&self) -> Decimal {
+        debug_assert!(self.num_levels >= 2, "grid config: num_levels must be ≥ 2 (validate() first)");
         if self.num_levels < 2 {
             return Decimal::ZERO;
         }
