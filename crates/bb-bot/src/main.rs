@@ -357,13 +357,33 @@ fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 // -- Auxiliary commands (unchanged) -----------------------------------------
 
 async fn keygen(network: String) -> Result<(), Box<dyn std::error::Error>> {
-    let kp = Keypair::generate();
-    let hex = kp.to_hex();
-    let address = kp.address();
+    // We generate the seed locally and hand it to `Keypair::from_hex` rather
+    // than going through `Keypair::generate` + `to_hex`. The SDK intentionally
+    // does not expose a way to serialize an existing `Keypair` back to hex,
+    // so key material can only flow _into_ the SDK, never back out. This
+    // command is the single, explicit place where a fresh Ed25519 secret is
+    // printed to the user.
+    use rand::RngCore;
     let faucet_host = match network.as_str() {
         "mainnet" => return Err("Faucet is only available on testnet".into()),
         _ => "app.testnet.bullet.xyz",
     };
+
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    let mut hex = String::with_capacity(64);
+    for b in seed {
+        use std::fmt::Write;
+        write!(&mut hex, "{b:02x}").expect("writing to String cannot fail");
+    }
+    // Scrub the stack-local seed immediately — it is already copied into `hex`
+    // and into the Keypair below.
+    seed.fill(0);
+
+    let keypair = Keypair::from_hex(&hex)
+        .map_err(|e| format!("Failed to build keypair from generated seed: {e}"))?;
+    let address = keypair.address();
+
     println!("Bullet {network} burner keypair");
     println!("  private_key_hex: 0x{hex}");
     println!("  address:         {address}");
