@@ -39,7 +39,6 @@ pub struct Harness {
     feeds: Vec<Box<dyn FeedSpawn>>,
     actors: Vec<Box<dyn ActorSpawn>>,
     brokers: Arc<BrokerRegistry>,
-    primary_broker: Arc<str>,
     enable_signal: bool,
     status_port: Option<u16>,
     bus: EventBus,
@@ -50,7 +49,6 @@ impl Harness {
         feeds: Vec<Box<dyn FeedSpawn>>,
         actors: Vec<Box<dyn ActorSpawn>>,
         brokers: Arc<BrokerRegistry>,
-        primary_broker: Arc<str>,
         enable_signal: bool,
         status_port: Option<u16>,
     ) -> Self {
@@ -58,7 +56,6 @@ impl Harness {
             feeds,
             actors,
             brokers,
-            primary_broker,
             enable_signal,
             status_port,
             bus: EventBus::new(),
@@ -76,7 +73,6 @@ impl Harness {
             let handle = spec.spawn(
                 &self.bus,
                 Arc::clone(&self.brokers),
-                Arc::clone(&self.primary_broker),
                 shutdown.clone(),
             );
             tracing::info!(actor = %name, "actor subscribed");

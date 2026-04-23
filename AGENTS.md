@@ -199,7 +199,7 @@ crates/
                       to ActiveAssetCtx so `MarkPriceUpdate.funding_rate` is
                       real (not hardcoded zero)
   strategies/
-    grid/                Grid trading — actor
+    grid/                Static grid — fixed-range, anchor-biased
     avellaneda-stoikov/  A-S market maker — actor
     funding-arb/         Cross-venue funding arb — actor
 config/
@@ -246,7 +246,7 @@ rates currently emitted as zero (needs `ActiveAssetCtx` subscription — TODO).
 TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 `[strategy.<type>]`, `[logging]`.
 
-- `[engine]` — `symbol`, `tick_interval_ms`, `reconnect_max_delay_ms`, `status_port`
+- `[engine]` — `tick_interval_ms`, `status_port` (optional). `symbol` lives inside each `[strategy.<name>]` section so multi-symbol setups are explicit.
 - Exchange configs: `type = "<name>"` + adapter-specific fields. Private keys
   via env vars (`BB_BULLET_PRIVATE_KEY_HEX`, `BB_HYPERLIQUID_PRIVATE_KEY_HEX`).
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.

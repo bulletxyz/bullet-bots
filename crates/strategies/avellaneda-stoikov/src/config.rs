@@ -15,6 +15,11 @@ use serde::Deserialize;
 ///   scales the inventory-skew term. 60–300s is a reasonable starting range.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AvellanedaStoikovConfig {
+    /// Broker to trade against — name matches the one passed to
+    /// `HarnessBuilder::wire_broker` (e.g. `"bullet"`).
+    #[serde(default = "default_exchange")]
+    pub exchange: String,
+
     /// Trading symbol (e.g. "BTC-USD").
     pub symbol: String,
 
@@ -118,6 +123,10 @@ fn default_max_half_spread_bps() -> Decimal {
 
 fn default_order_type() -> OrderType {
     OrderType::PostOnly
+}
+
+fn default_exchange() -> String {
+    "bullet".to_string()
 }
 
 fn default_min_spread_fee_multiplier() -> Decimal {

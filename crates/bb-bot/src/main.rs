@@ -173,7 +173,7 @@ async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let (broker, feeds) = connect_bullet(&bullet_cfg, &grid_cfg.symbol).await?;
     let broker: Arc<dyn Broker> = Arc::new(broker);
 
-    let grid = GridActor::new(grid_cfg, "bullet");
+    let grid = GridActor::new(grid_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
     let harness = HarnessBuilder::new()
@@ -206,7 +206,7 @@ async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::er
     let (broker, feeds) = connect_bullet(&bullet_cfg, &strat_cfg.symbol).await?;
     let broker: Arc<dyn Broker> = Arc::new(broker);
 
-    let actor = AvellanedaStoikovActor::new(strat_cfg, "bullet");
+    let actor = AvellanedaStoikovActor::new(strat_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
     let harness = HarnessBuilder::new()

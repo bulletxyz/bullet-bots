@@ -54,7 +54,7 @@ where
         cancel: CancellationToken,
     ) -> JoinHandle<Result<(), BotError>> {
         let tx = EventTx::new(bus.sender::<E>());
-        let ctx = FeedContext::new(self.name.clone(), cancel);
+        let ctx = FeedContext::new(cancel);
         let feed = self.feed.take().expect("feed consumed twice");
         tokio::spawn(async move { feed.run(tx, ctx).await })
     }
@@ -67,7 +67,6 @@ pub(super) trait ActorSpawn: Send {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
-        primary_broker: Arc<str>,
         shutdown: CancellationToken,
     ) -> ActorHandle;
 }
@@ -140,11 +139,23 @@ impl<A: Actor> SubscriptionFactory<A> {
                                 Ok(event) => {
                                     let mut guard = actor.lock().await;
                                     if let Err(e) = guard.on_event(event, &ctx).await {
-                                        tracing::error!(
-                                            actor = ctx.actor_name(),
-                                            error = %e,
-                                            "handler returned error"
-                                        );
+                                        // Severity follows the error's own policy:
+                                        //   retryable → WARN (transient, next event retries)
+                                        //   otherwise → ERROR (real problem worth attention)
+                                        // Fatal errors additionally request shutdown.
+                                        if e.is_retryable() {
+                                            tracing::warn!(
+                                                actor = ctx.actor_name(),
+                                                error = %e,
+                                                "handler returned retryable error"
+                                            );
+                                        } else {
+                                            tracing::error!(
+                                                actor = ctx.actor_name(),
+                                                error = %e,
+                                                "handler returned error"
+                                            );
+                                        }
                                         if e.is_fatal() {
                                             ctx.request_shutdown();
                                             break;
@@ -178,11 +189,9 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
-        primary_broker: Arc<str>,
         shutdown: CancellationToken,
     ) -> ActorHandle {
-        let ctx =
-            Arc::new(ActorContext::new(self.name.clone(), brokers, primary_broker, shutdown));
+        let ctx = Arc::new(ActorContext::new(self.name.clone(), brokers, shutdown));
         let name = self.name.clone();
         let actor = self.actor;
 
@@ -310,14 +319,11 @@ impl HarnessBuilder {
         self
     }
 
-    /// Build the harness. Returns an error if no brokers were registered or
-    /// if broker names collide.
+    /// Build the harness. Returns an error if broker names collide.
+    /// Zero brokers is allowed — pure-data actors (monitors, tests,
+    /// strategies that don't place orders) don't need one.
     pub fn build(self) -> Result<Harness, BotError> {
-        if self.brokers.is_empty() {
-            return Err(BotError::config("HarnessBuilder: no brokers registered"));
-        }
         let mut registry = BrokerRegistry::new();
-        let primary = self.brokers[0].0.clone();
         for (name, broker) in self.brokers {
             registry.insert(name, broker)?;
         }
@@ -325,7 +331,6 @@ impl HarnessBuilder {
             self.feeds,
             self.actors,
             Arc::new(registry),
-            primary,
             self.enable_signal,
             self.status_port,
         ))

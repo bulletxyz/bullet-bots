@@ -21,28 +21,14 @@ pub enum ArbPhase {
     Exiting,
 }
 
-/// One leg of the arb (one venue). Captures the entry target + direction so
-/// the actor can check "is this leg filled to target?" / "is it flat again?"
-/// by consulting the per-venue inventory tracker.
+/// One leg of the arb — which venue, which direction, and what target size.
+/// Position is tracked elsewhere (`InventoryTracker` per venue), so this is
+/// just the intent we're working toward.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArbLeg {
     pub exchange: String,
     pub entry_side: Side,
     pub target_size: Decimal,
-}
-
-impl ArbLeg {
-    pub fn new(exchange: String, entry_side: Side, target_size: Decimal) -> Self {
-        Self { exchange, entry_side, target_size }
-    }
-
-    /// Is this leg at its entry-target size in the right direction?
-    pub fn is_fully_entered(&self, net_position: Decimal) -> bool {
-        match self.entry_side {
-            Side::Buy => net_position >= self.target_size,
-            Side::Sell => net_position <= -self.target_size,
-        }
-    }
 }
 
 /// Lightweight top-level state owned by the actor: phase, legs, and the
@@ -122,17 +108,5 @@ mod tests {
         state.go_flat();
         assert_eq!(state.phase, ArbPhase::Flat);
         assert!(state.leg_a.is_none());
-    }
-
-    #[test]
-    fn leg_is_fully_entered() {
-        let short = ArbLeg::new("x".into(), Side::Sell, Decimal::new(1, 2));
-        assert!(short.is_fully_entered(-Decimal::new(1, 2)));
-        assert!(short.is_fully_entered(-Decimal::new(2, 2)));
-        assert!(!short.is_fully_entered(Decimal::ZERO));
-
-        let long = ArbLeg::new("x".into(), Side::Buy, Decimal::new(1, 2));
-        assert!(long.is_fully_entered(Decimal::new(1, 2)));
-        assert!(!long.is_fully_entered(Decimal::new(5, 3)));
     }
 }

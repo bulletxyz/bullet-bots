@@ -14,10 +14,8 @@
 //! confusion is gone too — events are typed and carry explicit `exchange`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
-use bb_core::broker::Broker;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
@@ -51,14 +49,6 @@ impl FundingArbActor {
 
     fn symbol(&self) -> &str {
         &self.config.symbol
-    }
-
-    fn broker(
-        &self,
-        cx: &ActorContext,
-        exchange: &str,
-    ) -> Result<Arc<dyn Broker>, BotError> {
-        cx.brokers().require(exchange).map(Arc::clone)
     }
 
     fn net_position(&self, exchange: &str) -> Decimal {
@@ -130,18 +120,22 @@ impl FundingArbActor {
             "Entering arb position"
         );
 
-        self.state.leg_a = Some(ArbLeg::new(
-            short_ex.clone(),
-            Side::Sell,
-            self.config.order_size,
-        ));
-        self.state.leg_b = Some(ArbLeg::new(long_ex.clone(), Side::Buy, self.config.order_size));
+        self.state.leg_a = Some(ArbLeg {
+            exchange: short_ex.clone(),
+            entry_side: Side::Sell,
+            target_size: self.config.order_size,
+        });
+        self.state.leg_b = Some(ArbLeg {
+            exchange: long_ex.clone(),
+            entry_side: Side::Buy,
+            target_size: self.config.order_size,
+        });
         self.state.transition(ArbPhase::Entering);
 
         let short_orders = [self.make_order(&short_ex, Side::Sell, self.config.order_size, false)];
         let long_orders = [self.make_order(&long_ex, Side::Buy, self.config.order_size, false)];
 
-        let (short_b, long_b) = (self.broker(cx, &short_ex)?, self.broker(cx, &long_ex)?);
+        let (short_b, long_b) = (cx.broker(&short_ex)?, cx.broker(&long_ex)?);
         let (short_res, long_res) =
             tokio::join!(short_b.place_orders(&short_orders), long_b.place_orders(&long_orders));
         if let Err(e) = &short_res {
@@ -170,7 +164,7 @@ impl FundingArbActor {
                 (Side::Buy, -pos)
             };
             let order = self.make_order(&leg.exchange, close_side, qty, true);
-            let broker = self.broker(cx, &leg.exchange)?;
+            let broker = cx.broker(&leg.exchange)?;
             if let Err(e) = broker.place_orders(&[order]).await {
                 tracing::error!(exchange = %leg.exchange, error = %e, "Close order failed");
             }
@@ -181,7 +175,7 @@ impl FundingArbActor {
     async fn emergency_flatten(&mut self, cx: &ActorContext, reason: &str) -> Result<(), BotError> {
         tracing::warn!(reason, "Emergency flatten");
         for ex in [&self.config.exchange_a, &self.config.exchange_b] {
-            let broker = self.broker(cx, ex)?;
+            let broker = cx.broker(ex)?;
             let _ = broker.cancel_all_orders(self.symbol()).await;
             let pos = self.net_position(ex);
             if pos.is_zero() {
@@ -201,13 +195,17 @@ impl FundingArbActor {
     }
 
     fn both_legs_fully_entered(&self) -> bool {
-        match (&self.state.leg_a, &self.state.leg_b) {
-            (Some(a), Some(b)) => {
-                a.is_fully_entered(self.net_position(&a.exchange))
-                    && b.is_fully_entered(self.net_position(&b.exchange))
+        let at_target = |leg: &ArbLeg| {
+            let pos = self.net_position(&leg.exchange);
+            match leg.entry_side {
+                Side::Buy => pos >= leg.target_size,
+                Side::Sell => pos <= -leg.target_size,
             }
-            _ => false,
-        }
+        };
+        matches!(
+            (&self.state.leg_a, &self.state.leg_b),
+            (Some(a), Some(b)) if at_target(a) && at_target(b)
+        )
     }
 
     fn both_legs_flat(&self) -> bool {
@@ -229,7 +227,7 @@ impl Actor for FundingArbActor {
         );
         // Cancel stale orders on both venues.
         for ex in [&self.config.exchange_a, &self.config.exchange_b] {
-            let _ = self.broker(cx, ex)?.cancel_all_orders(self.symbol()).await;
+            let _ = cx.broker(ex)?.cancel_all_orders(self.symbol()).await;
         }
         Ok(())
     }
@@ -243,7 +241,7 @@ impl Actor for FundingArbActor {
             let _ = self.emergency_flatten(cx, "shutdown").await;
         } else {
             for ex in [&self.config.exchange_a, &self.config.exchange_b] {
-                let _ = self.broker(cx, ex)?.cancel_all_orders(self.symbol()).await;
+                let _ = cx.broker(ex)?.cancel_all_orders(self.symbol()).await;
             }
         }
         tracing::info!(

@@ -9,11 +9,9 @@
 //!     used for position updates (that's the canonical-source invariant).
 //!   - `Tick` — refresh the quote ladder when `order_refresh_secs` elapsed.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use bb_core::broker::Broker;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
@@ -40,7 +38,6 @@ struct QuoteSlot {
 
 pub struct AvellanedaStoikovActor {
     config: AvellanedaStoikovConfig,
-    exchange_name: String,
     slots: Vec<QuoteSlot>,
     inventory: InventoryTracker,
     client_ids: ClientIdIssuer,
@@ -51,11 +48,10 @@ pub struct AvellanedaStoikovActor {
 }
 
 impl AvellanedaStoikovActor {
-    pub fn new(config: AvellanedaStoikovConfig, exchange_name: impl Into<String>) -> Self {
+    pub fn new(config: AvellanedaStoikovConfig) -> Self {
         let volatility = Volatility::new(config.vol_window_secs);
         Self {
             config,
-            exchange_name: exchange_name.into(),
             slots: Vec::new(),
             inventory: InventoryTracker::new(),
             client_ids: ClientIdIssuer::new(),
@@ -64,6 +60,10 @@ impl AvellanedaStoikovActor {
             last_mid: None,
             last_quote_at: None,
         }
+    }
+
+    fn exchange(&self) -> &str {
+        &self.config.exchange
     }
 
     fn symbol(&self) -> &str {
@@ -96,10 +96,6 @@ impl AvellanedaStoikovActor {
             )));
         }
         Ok(())
-    }
-
-    fn broker(&self, cx: &ActorContext) -> Result<Arc<dyn Broker>, BotError> {
-        cx.brokers().require(&self.exchange_name).map(Arc::clone)
     }
 
     fn build_ladder(&self, mid: Decimal) -> Option<(Quote, Vec<LadderRung>)> {
@@ -155,7 +151,7 @@ impl AvellanedaStoikovActor {
             });
         }
         if !cancels.is_empty() {
-            self.broker(cx)?.cancel_orders(&cancels).await?;
+            cx.broker(self.exchange())?.cancel_orders(&cancels).await?;
         }
         self.slots.clear();
         Ok(())
@@ -233,7 +229,7 @@ impl AvellanedaStoikovActor {
             return Ok(());
         }
 
-        let results = self.broker(cx)?.place_orders(&orders).await?;
+        let results = cx.broker(self.exchange())?.place_orders(&orders).await?;
         for ((side, level, price, size, cid), res) in intents.into_iter().zip(results.iter()) {
             if !res.success {
                 tracing::warn!(
@@ -278,7 +274,7 @@ impl AvellanedaStoikovActor {
 impl Actor for AvellanedaStoikovActor {
     async fn init(&mut self, cx: &ActorContext) -> Result<(), BotError> {
         self.check_fee_floor()?;
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         broker.cancel_all_orders(self.symbol()).await?;
         let book = broker.get_orderbook(self.symbol(), 20).await?;
         let mid = book.midpoint().ok_or_else(|| {
@@ -305,7 +301,7 @@ impl Actor for AvellanedaStoikovActor {
         _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         tracing::info!("Shutting down A-S actor — cancelling all orders");
         let _ = broker.cancel_all_orders(self.symbol()).await;
         tracing::info!(
@@ -332,7 +328,7 @@ impl Actor for AvellanedaStoikovActor {
 #[async_trait]
 impl EventHandler<BookUpdate> for AvellanedaStoikovActor {
     async fn on_event(&mut self, event: BookUpdate, _cx: &ActorContext) -> Result<(), BotError> {
-        if event.exchange != self.exchange_name || event.symbol != self.symbol() {
+        if event.exchange != self.exchange() || event.symbol != self.symbol() {
             return Ok(());
         }
         if let Some(mid) = event.orderbook.midpoint() {
@@ -349,15 +345,23 @@ impl EventHandler<BookUpdate> for AvellanedaStoikovActor {
 #[async_trait]
 impl EventHandler<Trade> for AvellanedaStoikovActor {
     async fn on_event(&mut self, event: Trade, _cx: &ActorContext) -> Result<(), BotError> {
-        if event.exchange != self.exchange_name || event.symbol != self.symbol() {
+        if event.exchange != self.exchange() || event.symbol != self.symbol() {
             return Ok(());
         }
         self.inventory.record_fill(event.side, event.price, event.quantity);
         // Drop the filled slot from our local view.
+        // Match on (Some(cid) == Some(cid)) or (Some(oid) == Some(oid)).
+        // The explicit `Some` gates prevent the naive `a == b` from matching
+        // `None == None` — which would otherwise wipe every slot that hasn't
+        // yet received its exchange order_id the moment a fill arrives
+        // without a client_id (possible on HL for orders placed without cloid).
+        let event_cid = event.client_id.as_deref();
+        let event_oid = Some(event.order_id.as_str()).filter(|s| !s.is_empty());
         self.slots.retain(|slot| {
-            let cid_match = event.client_id.as_deref()
-                == slot.client_id.as_deref().filter(|_| event.client_id.is_some());
-            let oid_match = slot.order_id.as_deref() == Some(event.order_id.as_str());
+            let cid_match =
+                event_cid.is_some() && slot.client_id.as_deref() == event_cid;
+            let oid_match =
+                event_oid.is_some() && slot.order_id.as_deref() == event_oid;
             !(cid_match || oid_match)
         });
         // Force a re-quote on the next tick so both sides follow the new
@@ -383,7 +387,7 @@ impl EventHandler<OrderLifecycle> for AvellanedaStoikovActor {
         event: OrderLifecycle,
         _cx: &ActorContext,
     ) -> Result<(), BotError> {
-        if event.exchange != self.exchange_name || event.order.symbol != self.symbol() {
+        if event.exchange != self.exchange() || event.order.symbol != self.symbol() {
             return Ok(());
         }
         // Learn exchange-assigned order_id once the venue acks the place.

@@ -9,7 +9,7 @@ perpetual futures DEX and other exchanges.
   shared helpers (`InventoryTracker`, `ClientIdIssuer`, `TickFeed`)
 - **bb-exchange-bullet** — Bullet DEX adapter — typed feeds + REST broker
 - **bb-exchange-hyperliquid** — Hyperliquid adapter — typed feeds + REST broker
-- **bb-strategy-grid** — Grid trading as an actor
+- **bb-strategy-grid** — Static grid bot (fixed price range, anchor-biased)
 - **bb-strategy-avellaneda-stoikov** — A-S market maker actor
 - **bb-strategy-funding-arb** — Cross-venue funding arb actor
 
@@ -47,9 +47,12 @@ cargo run --bin bb-bot -- run --config config/grid-example.toml
 
 ### Grid
 
-Places limit orders at fixed intervals around a reference price. When one
-fills, places a new order on the opposite side. Tracks net position and
-pauses when limits are hit. Runs on the harness.
+Static grid: N uniformly-spaced levels across a fixed `[lower_price,
+upper_price]` range. Initial bias is set by `anchor_price` — levels below
+the anchor start as buys, levels above start as sells. When a buy at level
+`N` fills, the actor re-arms level `N+1` as a sell (and vice versa), so
+every completed round trip harvests `spacing × order_size`. Levels never
+move; price leaving the range = grid idles until it returns.
 
 ```sh
 cargo run --bin bb-bot -- run --config config/grid-example.toml

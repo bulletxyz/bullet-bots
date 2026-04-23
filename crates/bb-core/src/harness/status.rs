@@ -1,9 +1,9 @@
 //! HTTP status API surfaces per-actor snapshots on a configurable port.
 //!
-//! Wired by `HarnessBuilder::with_status_port(p)`. Each registered actor
-//! contributes a name → `BoxStatus` entry; `/status` calls every closure on
-//! request and returns the combined JSON. Calls are `try_lock` so a slow
-//! handler never blocks the status endpoint.
+//! Wired by `HarnessBuilder::with_status_port(Some(p))`. Each registered
+//! actor contributes a name → `BoxStatus` entry; `/status` calls every
+//! closure on request and returns the combined JSON. Calls are `try_lock`
+//! so a slow handler never blocks the status endpoint.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
