@@ -319,12 +319,10 @@ impl HarnessBuilder {
         self
     }
 
-    /// Build the harness. Returns an error if no brokers were registered or
-    /// if broker names collide.
+    /// Build the harness. Returns an error if broker names collide.
+    /// Zero brokers is allowed — pure-data actors (monitors, tests,
+    /// strategies that don't place orders) don't need one.
     pub fn build(self) -> Result<Harness, BotError> {
-        if self.brokers.is_empty() {
-            return Err(BotError::config("HarnessBuilder: no brokers registered"));
-        }
         let mut registry = BrokerRegistry::new();
         for (name, broker) in self.brokers {
             registry.insert(name, broker)?;

@@ -24,7 +24,7 @@ use bb_core::types::{NewOrder, OrderBook, OrderStatus, OrderType, Side};
 use rust_decimal::Decimal;
 
 use crate::config::GridConfig;
-use crate::grid::{GridState, LevelState};
+use crate::grid::{FillOutcome, GridState, LevelState};
 
 pub struct GridActor {
     config: GridConfig,
@@ -391,11 +391,21 @@ impl EventHandler<Trade> for GridActor {
             "Grid fill"
         );
 
-        // Re-arm the adjacent level (or skip if it's already live). Log
-        // either way so an operator can see the "grid walking up/down"
-        // chain in the log stream without tailing state.
-        match self.state.on_fill(idx, event.side) {
-            Some((target_idx, target_side)) => {
+        // Accumulate the fill against the level's order. Partial fills
+        // keep the level Active and do not re-arm. Only a completing fill
+        // transitions to Dormant and fires the adjacent re-arm — operators
+        // can see the "grid walking up/down" chain in the log stream
+        // without tailing state.
+        match self.state.record_fill(idx, event.quantity, self.config.order_size) {
+            FillOutcome::Partial => {
+                tracing::debug!(
+                    level = idx,
+                    filled_qty = %self.state.levels[idx].filled_qty,
+                    order_size = %self.config.order_size,
+                    "Partial fill — level remains Active"
+                );
+            }
+            FillOutcome::Complete { rearm: Some((target_idx, target_side)) } => {
                 let target_price = self.state.levels[target_idx].price;
                 tracing::info!(
                     from = idx,
@@ -405,11 +415,15 @@ impl EventHandler<Trade> for GridActor {
                     "Re-armed adjacent level"
                 );
             }
-            None => {
+            FillOutcome::Complete { rearm: None } => {
                 tracing::debug!(
                     level = idx,
                     "No re-arm: adjacent level not dormant or at grid edge"
                 );
+            }
+            FillOutcome::Unmatched => {
+                // Shouldn't reach: find_fill_target already returned Some(idx).
+                tracing::warn!(level = idx, "record_fill returned Unmatched after find_fill_target");
             }
         }
 

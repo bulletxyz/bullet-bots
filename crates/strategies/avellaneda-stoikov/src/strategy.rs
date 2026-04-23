@@ -350,10 +350,18 @@ impl EventHandler<Trade> for AvellanedaStoikovActor {
         }
         self.inventory.record_fill(event.side, event.price, event.quantity);
         // Drop the filled slot from our local view.
+        // Match on (Some(cid) == Some(cid)) or (Some(oid) == Some(oid)).
+        // The explicit `Some` gates prevent the naive `a == b` from matching
+        // `None == None` — which would otherwise wipe every slot that hasn't
+        // yet received its exchange order_id the moment a fill arrives
+        // without a client_id (possible on HL for orders placed without cloid).
+        let event_cid = event.client_id.as_deref();
+        let event_oid = Some(event.order_id.as_str()).filter(|s| !s.is_empty());
         self.slots.retain(|slot| {
-            let cid_match = event.client_id.as_deref()
-                == slot.client_id.as_deref().filter(|_| event.client_id.is_some());
-            let oid_match = slot.order_id.as_deref() == Some(event.order_id.as_str());
+            let cid_match =
+                event_cid.is_some() && slot.client_id.as_deref() == event_cid;
+            let oid_match =
+                event_oid.is_some() && slot.order_id.as_deref() == event_oid;
             !(cid_match || oid_match)
         });
         // Force a re-quote on the next tick so both sides follow the new

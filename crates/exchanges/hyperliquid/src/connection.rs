@@ -14,7 +14,6 @@
 //!     until the per-coin `ActiveAssetCtx` arrives).
 
 use std::str::FromStr;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use bb_core::error::BotError;
@@ -142,10 +141,6 @@ pub async fn connect(
     };
     Ok((broker, feeds))
 }
-
-// Silence unused-import warning on Arc — kept for future wiring.
-#[allow(dead_code)]
-fn _use_arc<T>(_: Arc<T>) {}
 
 // -- Typed feeds ------------------------------------------------------------
 

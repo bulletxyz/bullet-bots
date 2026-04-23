@@ -43,6 +43,10 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DipBuyerConfig {
+    /// Broker name — matches the one passed to `HarnessBuilder::wire_broker`.
+    #[serde(default = "default_exchange")]
+    pub exchange: String,
+    pub symbol: String,
     /// Bid this far (in %) below the rolling reference price.
     pub dip_pct: Decimal,
     /// Close when mark price recovers to this %-above our entry.
@@ -50,6 +54,8 @@ pub struct DipBuyerConfig {
     pub order_size: Decimal,
     pub max_position: Decimal,
 }
+
+fn default_exchange() -> String { "bullet".to_string() }
 ```
 
 ## 3. The actor
@@ -59,10 +65,7 @@ pub struct DipBuyerConfig {
 ```rust
 pub mod config;
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use bb_core::broker::Broker;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, Trade, Tick};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
@@ -74,8 +77,6 @@ use config::DipBuyerConfig;
 
 pub struct DipBuyerActor {
     config: DipBuyerConfig,
-    exchange: String,
-    symbol: String,
     inventory: InventoryTracker,
     client_ids: ClientIdIssuer,
     reference_price: Option<Decimal>,
@@ -83,11 +84,9 @@ pub struct DipBuyerActor {
 }
 
 impl DipBuyerActor {
-    pub fn new(config: DipBuyerConfig, exchange: impl Into<String>, symbol: impl Into<String>) -> Self {
+    pub fn new(config: DipBuyerConfig) -> Self {
         Self {
             config,
-            exchange: exchange.into(),
-            symbol: symbol.into(),
             inventory: InventoryTracker::new(),
             client_ids: ClientIdIssuer::new(),
             reference_price: None,
@@ -95,9 +94,8 @@ impl DipBuyerActor {
         }
     }
 
-    fn broker(&self, cx: &ActorContext) -> Result<Arc<dyn Broker>, BotError> {
-        cx.brokers().require(&self.exchange).map(Arc::clone)
-    }
+    fn exchange(&self) -> &str { &self.config.exchange }
+    fn symbol(&self) -> &str { &self.config.symbol }
 
     async fn try_enter(&mut self, cx: &ActorContext, mid: Decimal) -> Result<(), BotError> {
         let Some(reference) = self.reference_price else { return Ok(()) };
@@ -106,10 +104,10 @@ impl DipBuyerActor {
         let drop_pct = (reference - mid) / reference * Decimal::from(100);
         if drop_pct < self.config.dip_pct { return Ok(()) }
 
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         let cid = self.client_ids.issue();
         broker.place_orders(&[NewOrder {
-            symbol: self.symbol.clone(),
+            symbol: self.symbol().to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             price: mid,
@@ -128,10 +126,10 @@ impl DipBuyerActor {
         let bounce_pct = (mid - entry) / entry * Decimal::from(100);
         if bounce_pct < self.config.exit_pct { return Ok(()) }
 
-        let broker = self.broker(cx)?;
+        let broker = cx.broker(self.exchange())?;
         let cid = self.client_ids.issue();
         broker.place_orders(&[NewOrder {
-            symbol: self.symbol.clone(),
+            symbol: self.symbol().to_string(),
             side: Side::Sell,
             order_type: OrderType::Limit,
             price: mid,
@@ -147,14 +145,14 @@ impl DipBuyerActor {
 #[async_trait]
 impl Actor for DipBuyerActor {
     async fn init(&mut self, cx: &ActorContext) -> Result<(), BotError> {
-        let broker = self.broker(cx)?;
-        broker.cancel_all_orders(&self.symbol).await?;
+        let broker = cx.broker(self.exchange())?;
+        broker.cancel_all_orders(self.symbol()).await?;
         Ok(())
     }
 
     async fn wind_down(&mut self, _r: &WindDownReason, cx: &ActorContext) -> Result<(), BotError> {
-        let broker = self.broker(cx)?;
-        let _ = broker.cancel_all_orders(&self.symbol).await;
+        let broker = cx.broker(self.exchange())?;
+        let _ = broker.cancel_all_orders(self.symbol()).await;
         tracing::info!(
             net_pos = %self.inventory.net_position,
             pnl = %self.inventory.realized_pnl,
@@ -176,7 +174,7 @@ impl Actor for DipBuyerActor {
 #[async_trait]
 impl EventHandler<BookUpdate> for DipBuyerActor {
     async fn on_event(&mut self, event: BookUpdate, _cx: &ActorContext) -> Result<(), BotError> {
-        if event.exchange == self.exchange && event.symbol == self.symbol {
+        if event.exchange == self.exchange() && event.symbol == self.symbol() {
             self.last_mid = event.orderbook.midpoint();
             // EMA-lite: if no reference, seed from the first mid.
             if self.reference_price.is_none() {
@@ -190,7 +188,7 @@ impl EventHandler<BookUpdate> for DipBuyerActor {
 #[async_trait]
 impl EventHandler<Trade> for DipBuyerActor {
     async fn on_event(&mut self, event: Trade, _cx: &ActorContext) -> Result<(), BotError> {
-        if event.exchange == self.exchange && event.symbol == self.symbol {
+        if event.exchange == self.exchange() && event.symbol == self.symbol() {
             // Canonical: Trade is the only source of position changes.
             self.inventory.record_fill(event.side, event.price, event.quantity);
         }
@@ -235,9 +233,9 @@ async fn run_harness_dip_buyer(
     let dip_cfg: DipBuyerConfig = sub.try_into()
         .map_err(|e: toml::de::Error| format!("Invalid dip-buyer config: {e}"))?;
 
-    let (broker, feeds) = connect_bullet(&bullet_cfg, &engine.symbol).await?;
+    let (broker, feeds) = connect_bullet(&bullet_cfg, &dip_cfg.symbol).await?;
     let broker: Arc<dyn bb_core::broker::Broker> = Arc::new(broker);
-    let actor = DipBuyerActor::new(dip_cfg, "bullet", engine.symbol.clone());
+    let actor = DipBuyerActor::new(dip_cfg);
     let tick = TickFeed::every_ms(engine.tick_interval_ms);
 
     let harness = HarnessBuilder::new()
@@ -264,7 +262,6 @@ async fn run_harness_dip_buyer(
 
 ```toml
 [engine]
-symbol = "BTC-USD"
 tick_interval_ms = 2000
 status_port = 3030
 
@@ -277,6 +274,8 @@ private_key_hex = ""
 type = "dip-buyer"
 
 [strategy.dip-buyer]
+symbol = "BTC-USD"
+# exchange defaults to "bullet" — set if you wire multiple brokers.
 dip_pct  = "1.5"
 exit_pct = "0.8"
 order_size = "0.001"
