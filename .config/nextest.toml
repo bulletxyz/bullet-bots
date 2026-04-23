@@ -1,0 +1,26 @@
+# cargo-nextest configuration.
+# https://nexte.st/docs/configuration/
+#
+# Install: `cargo install cargo-nextest --locked`
+# Run:     `cargo nextest run` (local), `cargo nextest run --profile ci` (CI).
+
+[profile.default]
+# Print failure output as tests fail, and again summarized at the end. Default
+# "immediate" waits to print until each test's stdout/stderr is fully captured,
+# which is worse when iterating locally.
+failure-output = "immediate-final"
+
+# Flag tests taking longer than 30s — helpful for catching accidentally-slow
+# unit tests. Not a kill timeout.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+# See every failure on a CI run; `fail-fast = true` hides the rest after
+# the first and forces rerun-to-debug cycles.
+fail-fast = false
+
+# Retry flaky tests once. We don't currently have flaky tests, but this
+# catches transient network/WS issues cheaply if one slips in.
+retries = 1
+
+failure-output = "immediate-final"

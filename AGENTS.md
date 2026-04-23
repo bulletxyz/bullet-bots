@@ -9,10 +9,21 @@ and multi-source event dispatch.
 
 ```sh
 cargo build                # full workspace
-cargo test                 # all unit tests
+cargo nextest run          # unit + integration tests (default runner)
+cargo test --doc           # doctests only (nextest doesn't run these)
 cargo clippy               # lints (pedantic enabled)
 cargo +nightly fmt         # format (nightly required for import grouping)
 ```
+
+First-time setup:
+
+```sh
+cargo install cargo-nextest --locked
+```
+
+The nextest config lives at `.config/nextest.toml`. CI should use the `ci`
+profile (`cargo nextest run --profile ci`) which retries once and doesn't
+fail-fast.
 
 Validate a config without connecting:
 
