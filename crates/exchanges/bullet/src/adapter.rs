@@ -305,10 +305,19 @@ impl Exchange for BulletExchange {
         let sdk_cancels: Vec<CancelOrderArgs> = cancels
             .iter()
             .filter_map(|c| {
-                c.order_id.parse::<u64>().ok().map(|id| CancelOrderArgs {
-                    order_id: Some(OrderId(id)),
-                    client_order_id: None,
-                })
+                // Prefer exchange order_id; fall back to client_id when the
+                // order_id hasn't landed yet (the usual case right after
+                // placement, before OrderUpdate events come through).
+                let order_id = c.order_id.parse::<u64>().ok().map(OrderId);
+                let client_order_id = c
+                    .client_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(ClientOrderId);
+                if order_id.is_none() && client_order_id.is_none() {
+                    return None;
+                }
+                Some(CancelOrderArgs { order_id, client_order_id })
             })
             .collect();
 

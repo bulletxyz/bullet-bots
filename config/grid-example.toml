@@ -24,6 +24,26 @@ order_size = "0.001"
 order_type = "PostOnly"
 max_position = "0.01"
 rebalance_threshold_pct = "3.0"
+# Minimum seconds between rebalances. Suppresses fee churn in whippy markets.
+rebalance_cooldown_secs = 30
+# Inventory skew: widens quotes on the leaned side proportional to net
+# position / max_position. 0 disables (reverts to symmetric grid).
+inventory_skew_k = "0.3"
+
+# Optional fee-floor guardrail. Refuses to run if spacing can't cover
+# `min_spacing_fee_multiplier` × round-trip maker fees.
+[strategy.grid.fees]
+maker_bps = "1.0"
+taker_bps = "5.0"
+min_spacing_fee_multiplier = "3.0"
+
+# Optional EMA trend filter. When fast vs slow EMA divergence in basis points
+# exceeds the threshold, all live orders are cancelled and placement pauses
+# until the slope relaxes. Cheapest defence against bleeding in trends.
+[strategy.grid.trend_filter]
+fast_secs = 300
+slow_secs = 3600
+pause_divergence_bps = "50"
 
 [logging]
 level = "info"

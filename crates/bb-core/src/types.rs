@@ -120,6 +120,10 @@ pub struct NewOrder {
 pub struct CancelOrder {
     pub symbol: String,
     pub order_id: String,
+    /// Optional caller-assigned `ClientOrderId`. Adapters should prefer this
+    /// when `order_id` is empty — useful for cancelling orders whose exchange
+    /// `order_id` hasn't landed in the cache yet.
+    pub client_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

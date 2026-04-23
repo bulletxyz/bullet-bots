@@ -1,4 +1,5 @@
 pub mod config;
+pub mod ema;
 pub mod grid;
 pub mod strategy;
 

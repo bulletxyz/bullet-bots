@@ -217,14 +217,32 @@ impl Exchange for HyperliquidExchange {
 
         let exchange = self.exchange_client()?;
 
+        // Hyperliquid's SDK only supports cancel-by-exchange-order-id. Entries
+        // with an empty `order_id` (e.g. client_id-only cancels produced by
+        // the grid strategy's soft reconciler) would be silently dropped
+        // here, so warn loudly if we see any — the caller's intent will
+        // not be honored.
+        let mut dropped_client_only = 0usize;
         let requests: Vec<ClientCancelRequest> = cancels
             .iter()
             .filter_map(|c| {
-                let oid = c.order_id.parse::<u64>().ok()?;
+                let Some(oid) = c.order_id.parse::<u64>().ok() else {
+                    if c.client_id.is_some() {
+                        dropped_client_only += 1;
+                    }
+                    return None;
+                };
                 let coin = convert::to_hl_coin(&c.symbol);
                 Some(ClientCancelRequest { asset: coin, oid })
             })
             .collect();
+        if dropped_client_only > 0 {
+            tracing::warn!(
+                dropped = dropped_client_only,
+                "Hyperliquid cancel_orders: dropped client_id-only cancels (SDK has no client_id path). \
+                 These orders will not be cancelled until their exchange order_id is known."
+            );
+        }
 
         match exchange.bulk_cancel(requests, None).await {
             Ok(_) => Ok(cancels
@@ -252,7 +270,13 @@ impl Exchange for HyperliquidExchange {
             return Ok(());
         }
         let cancels: Vec<CancelOrder> =
-            open.iter().map(|o| CancelOrder { symbol: symbol.to_string(), order_id: o.id.clone() }).collect();
+            open.iter()
+                .map(|o| CancelOrder {
+                    symbol: symbol.to_string(),
+                    order_id: o.id.clone(),
+                    client_id: None,
+                })
+                .collect();
         self.cancel_orders(&cancels).await?;
         Ok(())
     }

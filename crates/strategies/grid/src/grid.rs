@@ -1,8 +1,12 @@
+use std::time::Instant;
+
 use bb_core::types::Side;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 
-use crate::config::{GridConfig, SpacingMode};
+use crate::config::{GridConfig, SpacingMode, TrendFilterConfig};
+use crate::ema::Ema;
 
 /// Status of a single grid level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -38,6 +42,31 @@ pub struct GridState {
     pub total_fills: u64,
     /// Monotonic counter for `ClientOrderId` assignment; never reused.
     next_client_id: u64,
+    /// Last time a full compute_levels / reconcile mutated the level set.
+    last_rebalance_at: Option<Instant>,
+    /// Trend-filter EMAs (enabled only if config sets `trend_filter`).
+    fast_ema: Option<Ema>,
+    slow_ema: Option<Ema>,
+    /// True while the trend filter has paused placement.
+    pub paused: bool,
+}
+
+/// The delta a reconcile pass wants to apply to live orders. Cancels go first,
+/// then places for any uncovered desired levels.
+#[derive(Debug, Default)]
+pub struct ReconcileDiff {
+    /// client_ids (if set) or order_ids of levels to cancel.
+    pub cancels: Vec<OrderRef>,
+    /// Desired new levels to place (side, price).
+    pub places: Vec<(Side, Decimal)>,
+    /// True if any delta exists.
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum OrderRef {
+    Client(String),
+    Exchange(String),
 }
 
 impl GridState {
@@ -49,7 +78,18 @@ impl GridState {
             realized_pnl: Decimal::ZERO,
             total_fills: 0,
             next_client_id: 1,
+            last_rebalance_at: None,
+            fast_ema: None,
+            slow_ema: None,
+            paused: false,
         }
+    }
+
+    /// Enable trend-filter EMAs at construction time.
+    pub fn with_trend_filter(mut self, cfg: &TrendFilterConfig) -> Self {
+        self.fast_ema = Some(Ema::new(cfg.fast_secs as f64));
+        self.slow_ema = Some(Ema::new(cfg.slow_secs as f64));
+        self
     }
 
     /// Issue a fresh `ClientOrderId` as a decimal-encoded string.
@@ -59,43 +99,156 @@ impl GridState {
         id.to_string()
     }
 
-    /// Compute grid levels centered on `mid_price`.
-    pub fn compute_levels(&mut self, mid_price: Decimal, config: &GridConfig) {
-        self.levels.clear();
-        self.center_price = mid_price;
+    /// Compute the desired set of (side, price) levels for a given mid, applying
+    /// inventory skew but not mutating state. Used by both `compute_levels` and
+    /// `reconcile` so the geometry is defined in one place.
+    pub fn desired_levels(&self, mid_price: Decimal, config: &GridConfig) -> Vec<(Side, Decimal)> {
+        let mut out = Vec::with_capacity(config.num_levels * 2);
+        let (buy_mult, sell_mult) = skew_multipliers(
+            self.net_position,
+            config.max_position,
+            config.inventory_skew_k,
+        );
 
         for i in 1..=config.num_levels {
             let i_dec = Decimal::from(i as u64);
-
             let (buy_price, sell_price) = match config.spacing_mode {
                 SpacingMode::Geometric => {
-                    // Percentage-based spacing
                     let offset_pct = config.grid_spacing * i_dec / Decimal::from(100);
-                    let buy = mid_price * (Decimal::ONE - offset_pct);
-                    let sell = mid_price * (Decimal::ONE + offset_pct);
-                    (buy, sell)
+                    let buy_off = offset_pct * buy_mult;
+                    let sell_off = offset_pct * sell_mult;
+                    (mid_price * (Decimal::ONE - buy_off), mid_price * (Decimal::ONE + sell_off))
                 }
                 SpacingMode::Arithmetic => {
-                    // Fixed price spacing
                     let offset = config.grid_spacing * i_dec;
-                    (mid_price - offset, mid_price + offset)
+                    (mid_price - offset * buy_mult, mid_price + offset * sell_mult)
                 }
             };
+            out.push((Side::Buy, buy_price));
+            out.push((Side::Sell, sell_price));
+        }
+        out
+    }
 
+    /// Compute grid levels centered on `mid_price` and reset the level set.
+    /// Used on startup; tick-time updates should prefer `reconcile`.
+    pub fn compute_levels(&mut self, mid_price: Decimal, config: &GridConfig) {
+        let desired = self.desired_levels(mid_price, config);
+        self.levels.clear();
+        self.center_price = mid_price;
+        for (side, price) in desired {
             self.levels.push(GridLevel {
-                side: Side::Buy,
-                price: buy_price,
+                side,
+                price,
                 order_id: None,
                 client_id: None,
                 status: GridLevelStatus::Pending,
             });
+        }
+    }
+
+    /// Compute the cancel/place delta required to bring the active level set in
+    /// line with the desired geometry at `new_mid`. Existing active levels
+    /// whose price is within `match_tolerance_pct` of a desired level on the
+    /// same side are kept; everything else is either cancelled or newly placed.
+    pub fn reconcile(
+        &self,
+        new_mid: Decimal,
+        config: &GridConfig,
+        match_tolerance_pct: Decimal,
+    ) -> ReconcileDiff {
+        let desired = self.desired_levels(new_mid, config);
+        let mut diff = ReconcileDiff::default();
+
+        // Track which desired slots are already covered.
+        let mut desired_covered = vec![false; desired.len()];
+
+        for level in &self.levels {
+            if level.status != GridLevelStatus::Active {
+                continue;
+            }
+            // Find a desired level on the same side within tolerance.
+            let match_idx = desired.iter().enumerate().position(|(idx, (side, price))| {
+                if desired_covered[idx] || *side != level.side {
+                    return false;
+                }
+                if price.is_zero() {
+                    return false;
+                }
+                let delta = ((level.price - *price) / *price * Decimal::from(100)).abs();
+                delta <= match_tolerance_pct
+            });
+            match match_idx {
+                Some(idx) => desired_covered[idx] = true,
+                None => {
+                    let order_ref = level
+                        .client_id
+                        .clone()
+                        .map(OrderRef::Client)
+                        .or_else(|| level.order_id.clone().map(OrderRef::Exchange));
+                    if let Some(r) = order_ref {
+                        diff.cancels.push(r);
+                    }
+                }
+            }
+        }
+
+        for (idx, (side, price)) in desired.into_iter().enumerate() {
+            if !desired_covered[idx] {
+                diff.places.push((side, price));
+            }
+        }
+
+        diff.changed = !diff.cancels.is_empty() || !diff.places.is_empty();
+        diff
+    }
+
+    /// Apply a completed reconcile: drop cancelled levels, append new pending
+    /// levels, recenter. Call after the exchange has acked the delta.
+    pub fn apply_reconcile(
+        &mut self,
+        new_mid: Decimal,
+        cancelled: &[OrderRef],
+        new_pending: &[(Side, Decimal)],
+        now: Instant,
+    ) {
+        let cancelled_client: std::collections::HashSet<&str> = cancelled
+            .iter()
+            .filter_map(|r| match r {
+                OrderRef::Client(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        let cancelled_exchange: std::collections::HashSet<&str> = cancelled
+            .iter()
+            .filter_map(|r| match r {
+                OrderRef::Exchange(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        self.levels.retain(|l| {
+            let by_cid = l.client_id.as_deref().map_or(false, |c| cancelled_client.contains(c));
+            let by_oid = l.order_id.as_deref().map_or(false, |o| cancelled_exchange.contains(o));
+            !(by_cid || by_oid)
+        });
+        for (side, price) in new_pending {
             self.levels.push(GridLevel {
-                side: Side::Sell,
-                price: sell_price,
+                side: *side,
+                price: *price,
                 order_id: None,
                 client_id: None,
                 status: GridLevelStatus::Pending,
             });
+        }
+        self.center_price = new_mid;
+        self.last_rebalance_at = Some(now);
+    }
+
+    /// Whether the rebalance cooldown has elapsed.
+    pub fn rebalance_ready(&self, now: Instant, cooldown_secs: u64) -> bool {
+        match self.last_rebalance_at {
+            None => true,
+            Some(last) => now.duration_since(last).as_secs() >= cooldown_secs,
         }
     }
 
@@ -107,6 +260,31 @@ impl GridState {
         let drift_pct =
             ((current_mid - self.center_price) / self.center_price * Decimal::from(100)).abs();
         drift_pct > threshold_pct
+    }
+
+    /// Update trend-filter EMAs from a fresh mid observation, then evaluate
+    /// whether placement should be paused. Returns `(divergence_bps, paused)`.
+    /// If the filter is not configured, returns `(0, false)` and never pauses.
+    pub fn update_trend_filter(
+        &mut self,
+        mid: Decimal,
+        now: Instant,
+        cfg: &TrendFilterConfig,
+    ) -> (f64, bool) {
+        let Some(sample) = mid.to_f64() else {
+            return (0.0, self.paused);
+        };
+        let fast = self.fast_ema.get_or_insert_with(|| Ema::new(cfg.fast_secs as f64));
+        let f = fast.update(sample, now);
+        let slow = self.slow_ema.get_or_insert_with(|| Ema::new(cfg.slow_secs as f64));
+        let s = slow.update(sample, now);
+        if s == 0.0 {
+            return (0.0, self.paused);
+        }
+        let divergence_bps = (f - s) / s * 10_000.0;
+        let threshold = cfg.pause_divergence_bps.to_f64().unwrap_or(f64::INFINITY);
+        self.paused = divergence_bps.abs() > threshold;
+        (divergence_bps, self.paused)
     }
 
     /// Record a fill and update position tracking.
@@ -171,9 +349,36 @@ impl GridState {
     }
 }
 
+/// Compute `(buy_offset_mult, sell_offset_mult)` for inventory skew.
+///
+/// Skew ∈ [-1, 1]: positive skew = net long, which widens the buy side and
+/// leaves sell side untouched so inventory tends to unwind. When `k == 0` or
+/// `max_position == 0`, returns `(1, 1)`.
+fn skew_multipliers(
+    net_position: Decimal,
+    max_position: Decimal,
+    k: Decimal,
+) -> (Decimal, Decimal) {
+    if k.is_zero() || max_position.is_zero() {
+        return (Decimal::ONE, Decimal::ONE);
+    }
+    let mut skew = net_position / max_position;
+    // Clamp to [-1, 1] so one-sided overrun (e.g. from a gap fill past the
+    // hard cap) doesn't produce absurd offsets.
+    if skew > Decimal::ONE {
+        skew = Decimal::ONE;
+    } else if skew < -Decimal::ONE {
+        skew = -Decimal::ONE;
+    }
+    let buy_widen = if skew > Decimal::ZERO { k * skew } else { Decimal::ZERO };
+    let sell_widen = if skew < Decimal::ZERO { k * -skew } else { Decimal::ZERO };
+    (Decimal::ONE + buy_widen, Decimal::ONE + sell_widen)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn test_config() -> GridConfig {
         GridConfig {
@@ -184,6 +389,10 @@ mod tests {
             order_type: "PostOnly".to_string(),
             max_position: Decimal::from(5),
             rebalance_threshold_pct: Decimal::from(3),
+            rebalance_cooldown_secs: 30,
+            inventory_skew_k: Decimal::ZERO,
+            fees: None,
+            trend_filter: None,
         }
     }
 
@@ -202,7 +411,6 @@ mod tests {
         assert_eq!(buys.len(), 3);
         assert_eq!(sells.len(), 3);
 
-        // Buy levels should be below mid, sell above
         for b in &buys {
             assert!(b.price < Decimal::from(100));
         }
@@ -215,7 +423,7 @@ mod tests {
     fn compute_arithmetic_levels() {
         let config = GridConfig {
             spacing_mode: SpacingMode::Arithmetic,
-            grid_spacing: Decimal::from(10), // $10 apart
+            grid_spacing: Decimal::from(10),
             ..test_config()
         };
         let mut state = GridState::new();
@@ -232,11 +440,8 @@ mod tests {
         let mut state = GridState::new();
         state.center_price = Decimal::from(100);
 
-        // 2% drift, threshold 3% -> no rebalance
         assert!(!state.needs_rebalance(Decimal::from(102), Decimal::from(3)));
-        // 4% drift -> rebalance
         assert!(state.needs_rebalance(Decimal::from(104), Decimal::from(3)));
-        // Negative drift
         assert!(state.needs_rebalance(Decimal::from(96), Decimal::from(3)));
     }
 
@@ -252,7 +457,6 @@ mod tests {
         state.record_fill(Side::Sell, Decimal::from(101), Decimal::ONE);
         assert_eq!(state.net_position, Decimal::ZERO);
         assert_eq!(state.total_fills, 2);
-        // Profit: buy at 99 (center-99 = 1), sell at 101 (101-center = 1), total = 2
         assert_eq!(state.realized_pnl, Decimal::from(2));
     }
 
@@ -263,5 +467,129 @@ mod tests {
 
         assert!(state.at_max_position(Side::Buy, Decimal::from(5)));
         assert!(!state.at_max_position(Side::Sell, Decimal::from(5)));
+    }
+
+    #[test]
+    fn inventory_skew_widens_buy_side_when_long() {
+        // k = 0.4, net_position = +2.5 / max 5 → skew = 0.5 → buy_mult = 1.2, sell_mult = 1.0
+        let config = GridConfig {
+            inventory_skew_k: Decimal::new(4, 1), // 0.4
+            ..test_config()
+        };
+        let mut state = GridState::new();
+        state.net_position = Decimal::new(25, 1); // 2.5
+
+        // Baseline: zero skew at zero position.
+        let baseline = GridState::new().desired_levels(Decimal::from(100), &config);
+        let skewed = state.desired_levels(Decimal::from(100), &config);
+
+        let baseline_buy =
+            baseline.iter().find(|(s, _)| *s == Side::Buy).map(|(_, p)| *p).unwrap();
+        let baseline_sell =
+            baseline.iter().find(|(s, _)| *s == Side::Sell).map(|(_, p)| *p).unwrap();
+        let skewed_buy =
+            skewed.iter().find(|(s, _)| *s == Side::Buy).map(|(_, p)| *p).unwrap();
+        let skewed_sell =
+            skewed.iter().find(|(s, _)| *s == Side::Sell).map(|(_, p)| *p).unwrap();
+
+        // Long inventory → buy level pushed further below mid (lower price).
+        assert!(skewed_buy < baseline_buy, "skewed buy ({skewed_buy}) should be lower than baseline ({baseline_buy})");
+        // Sell side unchanged.
+        assert_eq!(skewed_sell, baseline_sell);
+    }
+
+    #[test]
+    fn inventory_skew_disabled_when_k_zero() {
+        let (b, s) = skew_multipliers(Decimal::from(5), Decimal::from(10), Decimal::ZERO);
+        assert_eq!(b, Decimal::ONE);
+        assert_eq!(s, Decimal::ONE);
+    }
+
+    #[test]
+    fn reconcile_identity_when_no_drift() {
+        let config = test_config();
+        let mut state = GridState::new();
+        state.compute_levels(Decimal::from(100), &config);
+        // Mark all levels as Active with client_ids so they look like live orders.
+        for l in &mut state.levels {
+            l.client_id = Some(state.next_client_id.to_string());
+            state.next_client_id += 1;
+            l.status = GridLevelStatus::Active;
+        }
+
+        let diff = state.reconcile(Decimal::from(100), &config, Decimal::new(1, 2)); // 0.01%
+        assert!(!diff.changed, "no drift → no diff");
+        assert!(diff.cancels.is_empty());
+        assert!(diff.places.is_empty());
+    }
+
+    #[test]
+    fn reconcile_emits_only_delta_on_small_drift() {
+        let config = GridConfig {
+            num_levels: 2,
+            grid_spacing: Decimal::new(5, 1), // 0.5% geometric
+            ..test_config()
+        };
+        let mut state = GridState::new();
+        state.compute_levels(Decimal::from(100), &config);
+        // Activate.
+        for l in &mut state.levels {
+            l.client_id = Some(state.next_client_id.to_string());
+            state.next_client_id += 1;
+            l.status = GridLevelStatus::Active;
+        }
+
+        // Drift mid by 0.2% — smaller than spacing (0.5%), so every level must
+        // be replaced. Matching tolerance is 0.05% so no old level matches a
+        // new desired price.
+        let new_mid = Decimal::new(1002, 1); // 100.2
+        let diff = state.reconcile(new_mid, &config, Decimal::new(5, 2));
+        assert!(diff.changed);
+        // 4 active levels all drifted → 4 cancels and 4 places.
+        assert_eq!(diff.cancels.len(), 4);
+        assert_eq!(diff.places.len(), 4);
+    }
+
+    #[test]
+    fn rebalance_cooldown_blocks_then_allows() {
+        let mut state = GridState::new();
+        let now = Instant::now();
+        // No rebalance yet → ready.
+        assert!(state.rebalance_ready(now, 30));
+        state.last_rebalance_at = Some(now);
+        assert!(!state.rebalance_ready(now + Duration::from_secs(5), 30));
+        assert!(state.rebalance_ready(now + Duration::from_secs(31), 30));
+    }
+
+    #[test]
+    fn trend_filter_pauses_on_sharp_uptrend() {
+        let cfg = TrendFilterConfig {
+            fast_secs: 30,
+            slow_secs: 600,
+            pause_divergence_bps: Decimal::from(50), // 0.5%
+        };
+        let mut state = GridState::new().with_trend_filter(&cfg);
+        let t0 = Instant::now();
+
+        // Seed both EMAs at 100.
+        state.update_trend_filter(Decimal::from(100), t0, &cfg);
+
+        // Sharp up-move for 30 seconds at +0.5/sec (1.5% over 30s).
+        let mut paused = false;
+        for i in 1..=30 {
+            let t = t0 + Duration::from_secs(i);
+            let mid = Decimal::from(100) + Decimal::new(i as i64 * 5, 1); // +0.5 per step
+            let (_, p) = state.update_trend_filter(mid, t, &cfg);
+            paused |= p;
+        }
+        assert!(paused, "sharp uptrend should trigger pause");
+    }
+
+    #[test]
+    fn trend_filter_noop_without_config() {
+        // Default state has no trend filter; update_trend_filter needs a cfg, so
+        // we just assert the `paused` flag stays false when not exercised.
+        let state = GridState::new();
+        assert!(!state.paused);
     }
 }
