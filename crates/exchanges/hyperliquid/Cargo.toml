@@ -18,3 +18,4 @@ serde_json = { workspace = true }
 rust_decimal = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+uuid = { version = "1", features = ["v5"] }

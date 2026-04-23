@@ -2,9 +2,7 @@
 # Run with: cargo run --bin bb-bot -- run --config config/avellaneda-stoikov-example.toml
 
 [engine]
-symbol = "BTC-USD"
 tick_interval_ms = 2000
-reconnect_max_delay_ms = 60000
 status_port = 3030
 
 [exchanges.bullet]
@@ -17,6 +15,7 @@ private_key_hex = ""
 type = "avellaneda-stoikov"
 
 [strategy.avellaneda-stoikov]
+symbol = "BTC-USD"
 # Quote size and inventory cap (used to normalize the A-S skew term and as a
 # hard backstop).
 order_size = "0.001"
@@ -49,7 +48,7 @@ order_levels = 3
 order_level_spread_bps = "10"
 order_level_amount_step = "0"
 
-order_type = "PostOnly"
+order_type = "post_only"
 
 [strategy.avellaneda-stoikov.fees]
 maker_bps = "1.0"

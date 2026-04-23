@@ -29,6 +29,7 @@ impl std::fmt::Display for Side {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OrderType {
     Limit,
     PostOnly,
@@ -88,6 +89,19 @@ impl OrderBook {
         match (self.best_bid(), self.best_ask()) {
             (Some(bid), Some(ask)) => Some(ask.price - bid.price),
             _ => None,
+        }
+    }
+
+    /// Would a PostOnly order at (`side`, `price`) cross the top of book?
+    ///
+    /// Returns `true` when a venue would reject the order as in-cross —
+    /// buys at or above the best ask, sells at or below the best bid. When
+    /// the relevant side of the book is empty we return `false` (no info =
+    /// don't block placement; the venue is authoritative).
+    pub fn would_cross(&self, side: Side, price: Decimal) -> bool {
+        match side {
+            Side::Buy => self.best_ask().is_some_and(|ask| price >= ask.price),
+            Side::Sell => self.best_bid().is_some_and(|bid| price <= bid.price),
         }
     }
 }
@@ -157,42 +171,6 @@ pub struct Balance {
     pub total: Decimal,
 }
 
-/// Events pushed from an exchange to the engine/strategy.
-#[derive(Debug, Clone)]
-pub enum ExchangeEvent {
-    /// Orderbook snapshot or update.
-    BookUpdate { exchange: String, symbol: String, orderbook: OrderBook },
-    /// An order's status changed.
-    OrderUpdate { exchange: String, order: Order },
-    /// A trade executed against our account.
-    Trade {
-        exchange: String,
-        symbol: String,
-        order_id: String,
-        client_id: Option<String>,
-        side: Side,
-        price: Decimal,
-        quantity: Decimal,
-        is_maker: bool,
-    },
-    /// Mark price and/or funding rate update.
-    MarkPrice { exchange: String, symbol: String, mark_price: Decimal, funding_rate: Decimal },
-    /// Connection was lost. The engine will handle reconnection.
-    Disconnected { exchange: String },
-}
-
-impl ExchangeEvent {
-    pub fn exchange_name(&self) -> &str {
-        match self {
-            ExchangeEvent::BookUpdate { exchange, .. } => exchange,
-            ExchangeEvent::OrderUpdate { exchange, .. } => exchange,
-            ExchangeEvent::Trade { exchange, .. } => exchange,
-            ExchangeEvent::MarkPrice { exchange, .. } => exchange,
-            ExchangeEvent::Disconnected { exchange } => exchange,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +221,38 @@ mod tests {
     fn side_opposite() {
         assert_eq!(Side::Buy.opposite(), Side::Sell);
         assert_eq!(Side::Sell.opposite(), Side::Buy);
+    }
+
+    #[test]
+    fn would_cross_buy_at_or_above_best_ask() {
+        let mut book = OrderBook::default();
+        book.bids.insert(Decimal::from(100), Decimal::from(1));
+        book.asks.insert(Decimal::from(101), Decimal::from(1));
+        assert!(book.would_cross(Side::Buy, Decimal::from(101)));
+        assert!(book.would_cross(Side::Buy, Decimal::from(102)));
+        assert!(!book.would_cross(Side::Buy, Decimal::from(100)));
+    }
+
+    #[test]
+    fn would_cross_sell_at_or_below_best_bid() {
+        let mut book = OrderBook::default();
+        book.bids.insert(Decimal::from(100), Decimal::from(1));
+        book.asks.insert(Decimal::from(101), Decimal::from(1));
+        assert!(book.would_cross(Side::Sell, Decimal::from(100)));
+        assert!(book.would_cross(Side::Sell, Decimal::from(99)));
+        assert!(!book.would_cross(Side::Sell, Decimal::from(101)));
+    }
+
+    #[test]
+    fn would_cross_empty_side_returns_false() {
+        // Sparse books happen during reconnect / at startup — don't block
+        // placement just because the relevant side isn't seeded yet.
+        let mut only_bids = OrderBook::default();
+        only_bids.bids.insert(Decimal::from(100), Decimal::from(1));
+        assert!(!only_bids.would_cross(Side::Buy, Decimal::from(1_000_000)));
+
+        let mut only_asks = OrderBook::default();
+        only_asks.asks.insert(Decimal::from(100), Decimal::from(1));
+        assert!(!only_asks.would_cross(Side::Sell, Decimal::from(1)));
     }
 }

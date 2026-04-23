@@ -101,6 +101,9 @@ pub fn quote(
 /// from the inner half-spread, anchored to the same reservation price. This
 /// is the layout Hummingbot's `avellaneda_market_making` uses via
 /// `order_levels` / `order_level_spread`.
+// Math API — named scalars beat a struct for the call-site intuition of the
+// formula. One extra parameter beyond clippy's soft limit is fine.
+#[allow(clippy::too_many_arguments)]
 pub fn quote_ladder(
     mid: f64,
     inventory_normalized: f64,

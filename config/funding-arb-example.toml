@@ -2,9 +2,7 @@
 # Run with: cargo run --bin bb-bot -- run --config config/funding-arb-example.toml
 
 [engine]
-symbol = "BTC-USD"
 tick_interval_ms = 10000
-reconnect_max_delay_ms = 60000
 status_port = 3031
 
 [exchanges.bullet]
@@ -23,6 +21,7 @@ private_key_hex = ""
 type = "funding-arb"
 
 [strategy.funding-arb]
+symbol = "BTC-USD"
 exchange_a = "bullet"
 exchange_b = "hyperliquid"
 entry_threshold = "0.0005"          # 0.05%/hr (~43% APR)
@@ -34,6 +33,9 @@ max_funding_rate = "0.005"          # reject rates > 0.5%/hr (anomalous)
 order_mode = "aggressive"           # IoC at best opposing + slippage
 phase_timeout_secs = 30
 slippage = "0.001"                  # 0.1%
+# Minimum seconds to remain Flat after a cycle completes before re-entering.
+# Stops rapid re-entry when spread wobbles around the entry threshold.
+min_flat_hold_secs = 60
 
 [logging]
 level = "info"
