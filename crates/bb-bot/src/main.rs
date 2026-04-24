@@ -14,13 +14,14 @@ use bb_core::config::EngineConfig;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{ActorSpec, HarnessBuilder};
 use bb_core::helpers::TickFeed;
-use bb_exchange_binance::{ReferencePriceUpdate, connect_binance};
+use bb_exchange_binance::{BinanceMarket, ReferencePriceUpdate, connect_binance};
 use bb_exchange_bullet::{BulletConfig, connect_bullet};
 use bb_exchange_hyperliquid::{HyperliquidConfig, connect_hyperliquid};
 use bb_strategy_avellaneda_stoikov::{AvellanedaStoikovActor, AvellanedaStoikovConfig};
 use bb_strategy_funding_arb::{FundingArbActor, FundingArbConfig};
 use bb_strategy_grid::{GridActor, GridConfig};
 use bb_strategy_reference_arb::{ReferenceArbActor, ReferenceArbConfig};
+use async_trait::async_trait;
 use bullet_rust_sdk::types::bullet_exchange_interface;
 use bullet_rust_sdk::{
     CallMessage, Client, Keypair, Network, PositiveDecimal, Transaction, UserAction,
@@ -66,6 +67,32 @@ enum Command {
         asset: String,
         #[arg(long)]
         amount: Decimal,
+    },
+    /// Cancel all open orders and market-close any open position on a symbol.
+    /// Useful for cleaning up after a prior session so `reference-arb` will
+    /// start (it refuses to run with a non-flat position).
+    Flatten {
+        #[arg(long, default_value = "testnet")]
+        network: String,
+        #[arg(long)]
+        symbol: String,
+    },
+    /// Record (ts, bullet_mid, binance_mid, spread_bps) to CSV continuously.
+    /// No trading. Use for collecting a dataset to analyze offline before
+    /// committing to a live strategy run.
+    Observe {
+        #[arg(long, default_value = "testnet")]
+        network: String,
+        #[arg(long, default_value = "BTC-USD")]
+        symbol: String,
+        #[arg(long, default_value = "btcusdt")]
+        binance_symbol: String,
+        /// "perp" (USDT-M futures) or "spot".
+        #[arg(long, default_value = "perp")]
+        binance_market: String,
+        /// Output CSV path. Parent directory is created if missing.
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -289,7 +316,8 @@ async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::
     let (broker, feeds) = connect_bullet(&bullet_cfg, &arb_cfg.symbol).await?;
     let broker: Arc<dyn Broker> = Arc::new(broker);
 
-    let ref_feed = connect_binance(&arb_cfg.binance_symbol);
+    let market: BinanceMarket = arb_cfg.binance_market.parse()?;
+    let ref_feed = connect_binance(&arb_cfg.binance_symbol, market);
     let actor = ReferenceArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
@@ -486,12 +514,283 @@ async fn deposit(
     Ok(())
 }
 
+async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::error::Error>> {
+    use bb_core::types::{NewOrder, OrderType, Side};
+    use secrecy::SecretString;
+
+    // Reuse the adapter's connect path to get a real Broker. We don't need the
+    // feeds — just a broker handle. The env-var flow populates key material.
+    let bullet_cfg = BulletConfig {
+        network,
+        key_file: std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into),
+        private_key_hex: SecretString::new(
+            std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default(),
+        ),
+    };
+    let (broker, _feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
+
+    let _ = broker.cancel_all_orders(&symbol).await;
+    let positions = broker.get_positions().await?;
+    let position = positions.iter().find(|p| p.symbol == symbol);
+
+    let Some(pos) = position else {
+        println!("No position on {symbol}. Nothing to flatten.");
+        return Ok(());
+    };
+    if pos.size.is_zero() {
+        println!("Position on {symbol} is already flat.");
+        return Ok(());
+    }
+
+    // Bullet reports size with a Side indicator; convert to signed and close
+    // with an opposite-side market order of the same magnitude.
+    let (close_side, qty) = match pos.side {
+        Some(Side::Buy) => (Side::Sell, pos.size),
+        Some(Side::Sell) => (Side::Buy, pos.size),
+        None => {
+            println!("Position size {} with no side — skipping.", pos.size);
+            return Ok(());
+        }
+    };
+
+    // Bullet's Market order is an IoC limit: needs a bounded worst-case price.
+    // Fetch a fresh book and set price = opposite_side × (1 ± 1%). The IoC
+    // ensures the actual fill is at top-of-book or better.
+    let book = broker.get_orderbook(&symbol, 5).await?;
+    let base = match close_side {
+        Side::Buy => book.best_ask().map(|l| l.price),
+        Side::Sell => book.best_bid().map(|l| l.price),
+    }
+    .ok_or("Orderbook has no opposing-side liquidity — cannot flatten")?;
+    let slip = Decimal::from(1) / Decimal::from(100); // 1%
+    let ioc_price = match close_side {
+        Side::Buy => base * (Decimal::ONE + slip),
+        Side::Sell => base * (Decimal::ONE - slip),
+    };
+
+    println!(
+        "Flattening {symbol}: current size={} side={:?} → IoC {:?} {} @ {ioc_price}",
+        pos.size, pos.side, close_side, qty
+    );
+    let order = NewOrder {
+        symbol: symbol.clone(),
+        side: close_side,
+        order_type: OrderType::Market,
+        price: ioc_price,
+        quantity: qty,
+        client_id: None,
+        reduce_only: true,
+    };
+    let results = broker.place_orders(&[order]).await?;
+    for r in &results {
+        if r.success {
+            println!("Close order accepted: order_id={}", r.order_id);
+        } else {
+            println!("Close order FAILED: {:?}", r.error);
+        }
+    }
+    Ok(())
+}
+
+// -- Observe: record (ts, bullet_mid, binance_mid, spread_bps) CSV ---------
+
+struct ObserverActor {
+    symbol: String,
+    binance_symbol: String,
+    file: std::io::BufWriter<std::fs::File>,
+    bullet_mid: Option<Decimal>,
+    binance_mid: Option<Decimal>,
+    last_written: Option<(Decimal, Decimal)>,
+    rows: u64,
+    events: u64,
+}
+
+impl ObserverActor {
+    fn new(symbol: String, binance_symbol: String, path: &std::path::Path) -> std::io::Result<Self> {
+        use std::io::Write;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::File::create(path)?;
+        let mut file = std::io::BufWriter::new(file);
+        writeln!(file, "ts_unix_ms,bullet_mid,binance_mid,spread_bps")?;
+        Ok(Self {
+            symbol,
+            binance_symbol,
+            file,
+            bullet_mid: None,
+            binance_mid: None,
+            last_written: None,
+            rows: 0,
+            events: 0,
+        })
+    }
+
+    /// Write a row only when either mid has changed since the last write.
+    /// Bullet testnet can emit many BookUpdate events per second with an
+    /// unchanged top-of-book; recording them all produces GB-scale CSVs
+    /// of duplicates.
+    fn record(&mut self) -> std::io::Result<()> {
+        use std::io::Write;
+        self.events += 1;
+        let (Some(b), Some(r)) = (self.bullet_mid, self.binance_mid) else {
+            return Ok(());
+        };
+        if r.is_zero() {
+            return Ok(());
+        }
+        if self.last_written == Some((b, r)) {
+            return Ok(());
+        }
+        let spread_bps = (b - r) / r * Decimal::from(10_000);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        writeln!(self.file, "{ts},{b},{r},{spread_bps}")?;
+        self.last_written = Some((b, r));
+        self.rows += 1;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl bb_core::harness::Actor for ObserverActor {
+    async fn init(
+        &mut self,
+        _cx: &bb_core::harness::ActorContext,
+    ) -> Result<(), bb_core::error::BotError> {
+        tracing::info!(symbol = %self.symbol, binance = %self.binance_symbol, "observer started");
+        Ok(())
+    }
+    async fn wind_down(
+        &mut self,
+        _reason: &bb_core::harness::WindDownReason,
+        _cx: &bb_core::harness::ActorContext,
+    ) -> Result<(), bb_core::error::BotError> {
+        use std::io::Write;
+        let _ = self.file.flush();
+        tracing::info!(rows = self.rows, "observer final — flushed CSV");
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl bb_core::harness::EventHandler<BookUpdate> for ObserverActor {
+    async fn on_event(
+        &mut self,
+        event: BookUpdate,
+        _cx: &bb_core::harness::ActorContext,
+    ) -> Result<(), bb_core::error::BotError> {
+        if event.symbol != self.symbol {
+            return Ok(());
+        }
+        if let Some(mid) = event.orderbook.midpoint() {
+            self.bullet_mid = Some(mid);
+        }
+        self.record().map_err(|e| bb_core::error::BotError::strategy(e.to_string()))
+    }
+}
+
+#[async_trait]
+impl bb_core::harness::EventHandler<ReferencePriceUpdate> for ObserverActor {
+    async fn on_event(
+        &mut self,
+        event: ReferencePriceUpdate,
+        _cx: &bb_core::harness::ActorContext,
+    ) -> Result<(), bb_core::error::BotError> {
+        if !event.symbol.eq_ignore_ascii_case(&self.binance_symbol) {
+            return Ok(());
+        }
+        self.binance_mid = Some(event.mid);
+        self.record().map_err(|e| bb_core::error::BotError::strategy(e.to_string()))
+    }
+}
+
+#[async_trait]
+impl bb_core::harness::EventHandler<Tick> for ObserverActor {
+    async fn on_event(
+        &mut self,
+        _event: Tick,
+        _cx: &bb_core::harness::ActorContext,
+    ) -> Result<(), bb_core::error::BotError> {
+        use std::io::Write;
+        // Flush every tick so a Ctrl-C doesn't lose the last seconds of data.
+        let _ = self.file.flush();
+        tracing::info!(
+            rows_written = self.rows,
+            events_seen = self.events,
+            bullet_mid = ?self.bullet_mid,
+            binance_mid = ?self.binance_mid,
+            "observer tick"
+        );
+        Ok(())
+    }
+}
+
+async fn observe(
+    network: String,
+    symbol: String,
+    binance_symbol: String,
+    binance_market: String,
+    output: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use secrecy::SecretString;
+
+    let bullet_cfg = BulletConfig {
+        network,
+        key_file: std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into),
+        private_key_hex: SecretString::new(
+            std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default(),
+        ),
+    };
+
+    let (_broker, bullet_feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
+    let market: BinanceMarket = binance_market.parse()?;
+    let ref_feed = connect_binance(&binance_symbol, market);
+
+    let observer = ObserverActor::new(symbol.clone(), binance_symbol.clone(), &output)?;
+    let tick = TickFeed::new(Duration::from_secs(30));
+
+    tracing::info!(
+        output = %output.display(),
+        bullet_symbol = %symbol,
+        binance = %binance_symbol,
+        market = %binance_market.to_string(),
+        "observer starting"
+    );
+
+    let harness = HarnessBuilder::new()
+        .enable_signal_shutdown()
+        .wire_feed_named("bullet-book", bullet_feeds.book)
+        .wire_feed_named("binance-ref", ref_feed)
+        .wire_feed_named("ticks", tick)
+        .wire_actor(
+            ActorSpec::new("observer", observer)
+                .sub::<BookUpdate>()
+                .sub::<ReferencePriceUpdate>()
+                .sub::<Tick>(),
+        )
+        .build()?;
+    let reason = harness.run().await?;
+    tracing::info!(?reason, "observe wound down");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
         Command::Keygen { network, out } => keygen(network, out),
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,
+        Command::Flatten { network, symbol } => flatten(network, symbol).await,
+        Command::Observe {
+            network,
+            symbol,
+            binance_symbol,
+            binance_market,
+            output,
+        } => observe(network, symbol, binance_symbol, binance_market, output).await,
         Command::Validate { config: path } => validate(load_config(&path)?),
         Command::Run { config: path } => {
             let config = load_config(&path)?;

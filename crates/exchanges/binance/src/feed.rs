@@ -47,13 +47,49 @@ struct BookTicker {
     a: String,
 }
 
-/// Open the bookTicker stream for `symbol` (passed as-is to the URL, e.g.
-/// `"btcusdt"`). Spawns a reconnecting background task and returns the feed
-/// handle. This never fails synchronously — connection attempts happen on
-/// the spawned task and are retried with backoff.
-pub fn connect_binance(symbol: &str) -> BinanceReferencePriceFeed {
+/// Which Binance venue to reference.
+///
+/// For arbitrage against a perpetual DEX (Bullet), [`BinanceMarket::Perp`]
+/// is almost always the right choice — comparing perps-to-perps removes the
+/// funding-basis confound between spot and perp prices. Spot is retained as
+/// an option for completeness (useful if you're comparing against a spot
+/// venue on the other side).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinanceMarket {
+    /// `stream.binance.com:9443` — spot order book.
+    Spot,
+    /// `fstream.binance.com` — USDT-margined futures (perps).
+    Perp,
+}
+
+impl BinanceMarket {
+    fn host(self) -> &'static str {
+        match self {
+            Self::Spot => "stream.binance.com:9443",
+            Self::Perp => "fstream.binance.com",
+        }
+    }
+}
+
+impl std::str::FromStr for BinanceMarket {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "spot" => Ok(Self::Spot),
+            "perp" | "perps" | "futures" | "fstream" => Ok(Self::Perp),
+            other => Err(format!("unknown binance market '{other}' (want 'spot' or 'perp')")),
+        }
+    }
+}
+
+/// Open the bookTicker stream for `symbol` on the chosen Binance market.
+/// `symbol` is passed lowercased into the URL (e.g. `"btcusdt"`). Spawns a
+/// reconnecting background task and returns the feed handle. Connection
+/// attempts happen on the spawned task with 1s→30s exponential backoff —
+/// this fn itself never fails.
+pub fn connect_binance(symbol: &str, market: BinanceMarket) -> BinanceReferencePriceFeed {
     let symbol = symbol.to_lowercase();
-    let url = format!("wss://stream.binance.com:9443/ws/{symbol}@bookTicker");
+    let url = format!("wss://{}/ws/{symbol}@bookTicker", market.host());
     let (tx, rx) = mpsc::unbounded_channel::<ReferencePriceUpdate>();
 
     tokio::spawn(async move {

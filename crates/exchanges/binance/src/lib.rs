@@ -10,4 +10,4 @@
 
 pub mod feed;
 
-pub use feed::{BinanceReferencePriceFeed, ReferencePriceUpdate, connect_binance};
+pub use feed::{BinanceMarket, BinanceReferencePriceFeed, ReferencePriceUpdate, connect_binance};

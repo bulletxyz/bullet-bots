@@ -26,7 +26,7 @@ use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
 use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
-use bb_core::types::{NewOrder, OrderStatus, OrderType, Side};
+use bb_core::types::{NewOrder, OrderBook, OrderStatus, OrderType, Side};
 use bb_exchange_binance::ReferencePriceUpdate;
 use rust_decimal::Decimal;
 
@@ -84,6 +84,7 @@ pub struct ReferenceArbActor {
     state: ArbState,
     inventory: InventoryTracker,
     client_ids: ClientIdIssuer,
+    bullet_book: Option<OrderBook>,
     bullet_mid: Option<Decimal>,
     binance_mid: Option<Decimal>,
     binance_last_seen: Option<Instant>,
@@ -99,11 +100,40 @@ impl ReferenceArbActor {
             state: ArbState::flat(),
             inventory: InventoryTracker::new(),
             client_ids: ClientIdIssuer::new(),
+            bullet_book: None,
             bullet_mid: None,
             binance_mid: None,
             binance_last_seen: None,
             stale_logged: false,
         }
+    }
+
+    /// Simulated fill price for a market order against the current book.
+    /// Uses the far side (market buys eat the ask, market sells eat the bid).
+    /// Falls back to `bullet_mid` if book sides are empty — better than nothing,
+    /// but inflates paper PnL because it ignores the half-spread cost.
+    fn simulated_fill_price(&self, side: Side) -> Option<Decimal> {
+        let book = self.bullet_book.as_ref()?;
+        let level = match side {
+            Side::Buy => book.best_ask(),
+            Side::Sell => book.best_bid(),
+        };
+        level.map(|l| l.price).or(self.bullet_mid)
+    }
+
+    /// Worst-case IoC limit price for a "market" order on Bullet. Bullet's
+    /// Market type is an IoC limit — it rejects `price = 0`, so we compute
+    /// a bounded aggressive price from the opposite side of the book plus
+    /// `market_slippage_bps`. The IoC semantics ensure we actually fill at
+    /// or better than the true top-of-book, not at this worst-case bound.
+    fn aggressive_ioc_price(&self, side: Side) -> Option<Decimal> {
+        let mid = self.bullet_mid?;
+        let base = self.simulated_fill_price(side).unwrap_or(mid);
+        let slip = self.config.market_slippage_bps / Decimal::from(BPS_SCALE);
+        Some(match side {
+            Side::Buy => base * (Decimal::ONE + slip),
+            Side::Sell => base * (Decimal::ONE - slip),
+        })
     }
 
     fn compute_spread_bps(&self) -> Option<Decimal> {
@@ -166,6 +196,17 @@ impl ReferenceArbActor {
             return Ok(());
         }
 
+        // Per-update observation log — lets operators see the live spread
+        // without waiting for Tick. DEBUG level so it doesn't flood by default.
+        tracing::debug!(
+            tag = "OBSERVE",
+            spread_bps = %spread_bps,
+            bullet_mid = %self.bullet_mid.unwrap_or_default(),
+            binance_mid = %self.binance_mid.unwrap_or_default(),
+            state = self.state.kind(),
+            "reference-arb observation"
+        );
+
         match self.state {
             ArbState::Flat { .. } => self.evaluate_entry(cx, spread_bps).await,
             ArbState::Holding { side, .. } => self.evaluate_exit(cx, side, spread_bps).await,
@@ -210,12 +251,36 @@ impl ReferenceArbActor {
             return Ok(());
         }
 
+        if self.config.dry_run {
+            let fill_price = self
+                .simulated_fill_price(side)
+                .ok_or_else(|| BotError::strategy("dry_run entry: no book or mid available"))?;
+            self.inventory.record_fill(side, fill_price, self.config.order_size);
+            tracing::info!(
+                tag = "PAPER",
+                side = %side,
+                spread_bps = %spread_bps,
+                fill_price = %fill_price,
+                net_pos = %self.inventory.net_position,
+                "PAPER entry (dry_run): simulated market fill, entering Holding"
+            );
+            self.state = ArbState::Holding {
+                side,
+                entry_spread_bps: spread_bps,
+                ticks: 0,
+            };
+            return Ok(());
+        }
+
+        let ioc_price = self.aggressive_ioc_price(side).ok_or_else(|| {
+            BotError::strategy("entry: no book available to compute aggressive IoC price")
+        })?;
         let client_id = self.client_ids.issue();
         let order = NewOrder {
             symbol: self.config.symbol.clone(),
             side,
             order_type: OrderType::Market,
-            price: Decimal::ZERO, // price ignored for market
+            price: ioc_price,
             quantity: self.config.order_size,
             client_id: Some(client_id.clone()),
             reduce_only: false,
@@ -286,12 +351,35 @@ impl ReferenceArbActor {
             (Side::Buy, -pos)
         };
 
+        if self.config.dry_run {
+            let fill_price = self
+                .simulated_fill_price(close_side)
+                .ok_or_else(|| BotError::strategy("dry_run exit: no book or mid available"))?;
+            let realized = self.inventory.record_fill(close_side, fill_price, qty);
+            tracing::info!(
+                tag = "PAPER",
+                reason = ?reason,
+                side = %close_side,
+                qty = %qty,
+                fill_price = %fill_price,
+                spread_bps = %spread_bps,
+                fill_pnl = %realized,
+                cumulative_pnl = %self.inventory.realized_pnl,
+                "PAPER exit (dry_run): simulated closing fill, back to Flat"
+            );
+            self.state = ArbState::flat();
+            return Ok(());
+        }
+
+        let ioc_price = self.aggressive_ioc_price(close_side).ok_or_else(|| {
+            BotError::strategy("exit: no book available to compute aggressive IoC price")
+        })?;
         let client_id = self.client_ids.issue();
         let order = NewOrder {
             symbol: self.config.symbol.clone(),
             side: close_side,
             order_type: OrderType::Market,
-            price: Decimal::ZERO,
+            price: ioc_price,
             quantity: qty,
             client_id: Some(client_id.clone()),
             reduce_only: true,
@@ -416,6 +504,7 @@ impl EventHandler<BookUpdate> for ReferenceArbActor {
         if let Some(mid) = event.orderbook.midpoint() {
             self.bullet_mid = Some(mid);
         }
+        self.bullet_book = Some(event.orderbook);
         self.evaluate(cx).await
     }
 }
@@ -614,6 +703,7 @@ mod tests {
             exchange: "bullet".into(),
             symbol: "BTC-USD".into(),
             binance_symbol: "btcusdt".into(),
+            binance_market: "perp".into(),
             order_size: Decimal::new(1, 3),
             max_position: Decimal::new(3, 3),
             entry_threshold_bps: Decimal::from(15),
@@ -624,6 +714,8 @@ mod tests {
             reference_stale_secs: 10,
             taker_fee_bps: Decimal::from(4),
             min_edge_multiple: Decimal::new(15, 1),
+            market_slippage_bps: Decimal::from(50),
+            dry_run: false,
         }
     }
 

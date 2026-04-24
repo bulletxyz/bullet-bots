@@ -18,6 +18,13 @@ pub struct ReferenceArbConfig {
     /// Binance stream symbol (e.g. `"btcusdt"`). Case-insensitive on compare.
     pub binance_symbol: String,
 
+    /// Which Binance venue to use as the reference: "perp" (USDT-margined
+    /// futures, default — correct for arb vs a perp DEX) or "spot". Matching
+    /// perps-to-perps avoids the funding-basis confound that shows up when
+    /// you compare a perp DEX price to Binance spot.
+    #[serde(default = "default_binance_market")]
+    pub binance_market: String,
+
     pub order_size: Decimal,
     pub max_position: Decimal,
 
@@ -49,6 +56,23 @@ pub struct ReferenceArbConfig {
     /// Edge must exceed this × round-trip fees.
     #[serde(default = "default_min_edge_multiple")]
     pub min_edge_multiple: Decimal,
+
+    /// Max IoC slippage in bps. Bullet's "market" order is actually an
+    /// Immediate-Or-Cancel limit — it needs a bounded worst-case price.
+    /// We compute `price = best_opposite × (1 ± slippage)` and let the
+    /// venue fill at a better price or cancel the residual. Default 50 bps
+    /// (0.5%) is generous enough to fill in thin testnet books while still
+    /// capping runaway slippage from a degenerate book.
+    #[serde(default = "default_market_slippage_bps")]
+    pub market_slippage_bps: Decimal,
+
+    /// Dry-run: never place real orders. Fills are simulated at the current
+    /// best bid (sell) or best ask (buy) on Bullet's book, inventory is
+    /// updated accordingly, and the strategy still runs its full state
+    /// machine. Use to measure signal quality / paper PnL on live data
+    /// without capital at risk.
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 fn default_persistence_ticks() -> u32 {
@@ -62,6 +86,12 @@ fn default_reference_stale_secs() -> u64 {
 }
 fn default_min_edge_multiple() -> Decimal {
     Decimal::new(15, 1) // 1.5
+}
+fn default_market_slippage_bps() -> Decimal {
+    Decimal::from(50)
+}
+fn default_binance_market() -> String {
+    "perp".into()
 }
 
 impl ReferenceArbConfig {
@@ -110,6 +140,7 @@ mod tests {
             exchange: "bullet".into(),
             symbol: "BTC-USD".into(),
             binance_symbol: "btcusdt".into(),
+            binance_market: "perp".into(),
             order_size: Decimal::new(1, 3),     // 0.001
             max_position: Decimal::new(3, 3),   // 0.003
             entry_threshold_bps: Decimal::from(15),
@@ -120,6 +151,8 @@ mod tests {
             reference_stale_secs: 10,
             taker_fee_bps: Decimal::from(4),
             min_edge_multiple: Decimal::new(15, 1),
+            market_slippage_bps: Decimal::from(50),
+            dry_run: false,
         }
     }
 
