@@ -6,6 +6,7 @@
 //! wiring code stays typed.
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -91,13 +92,30 @@ impl<A: Actor> ActorSpec<A> {
     /// Subscribe this actor to events of type `E`. Requires the actor to
     /// implement `EventHandler<E>`. Each subscription becomes its own task at
     /// run time, guarded by a per-actor mutex so handler calls never overlap.
+    ///
+    /// Use [`sub_critical`] for loss-sensitive events (`Trade`,
+    /// `OrderLifecycle`) where a lagged subscriber is a correctness error.
     #[must_use]
     pub fn sub<E>(mut self) -> Self
     where
         A: EventHandler<E>,
         E: Event,
     {
-        self.subscriptions.push(SubscriptionFactory::new::<E>());
+        self.subscriptions.push(SubscriptionFactory::new::<E>(false));
+        self
+    }
+
+    /// Like [`sub`], but treats a lagged event stream as fatal: the harness
+    /// will shut down if the actor falls behind on this event type. Use for
+    /// `Trade` and `OrderLifecycle` subscriptions — a missed fill or lifecycle
+    /// update leaves position tracking permanently wrong.
+    #[must_use]
+    pub fn sub_critical<E>(mut self) -> Self
+    where
+        A: EventHandler<E>,
+        E: Event,
+    {
+        self.subscriptions.push(SubscriptionFactory::new::<E>(true));
         self
     }
 }
@@ -119,7 +137,7 @@ struct SubscriptionFactory<A: Actor> {
 }
 
 impl<A: Actor> SubscriptionFactory<A> {
-    fn new<E>() -> Self
+    fn new<E>(fatal_on_lag: bool) -> Self
     where
         A: EventHandler<E>,
         E: Event,
@@ -163,11 +181,21 @@ impl<A: Actor> SubscriptionFactory<A> {
                                     }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                    tracing::warn!(
-                                        actor = ctx.actor_name(),
-                                        lagged = n,
-                                        "actor lagged on event stream"
-                                    );
+                                    if fatal_on_lag {
+                                        tracing::error!(
+                                            actor = ctx.actor_name(),
+                                            lagged = n,
+                                            "actor lagged on critical event stream — shutting down"
+                                        );
+                                        ctx.request_shutdown();
+                                        break;
+                                    } else {
+                                        tracing::warn!(
+                                            actor = ctx.actor_name(),
+                                            lagged = n,
+                                            "actor lagged on event stream"
+                                        );
+                                    }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                             }
@@ -262,7 +290,7 @@ pub struct HarnessBuilder {
     actors: Vec<Box<dyn ActorSpawn>>,
     brokers: Vec<(Arc<str>, Arc<dyn Broker>)>,
     enable_signal: bool,
-    status_port: Option<u16>,
+    status_bind: Option<SocketAddr>,
 }
 
 impl HarnessBuilder {
@@ -277,11 +305,20 @@ impl HarnessBuilder {
         self
     }
 
-    /// Enable the HTTP status API on the given port. `None` disables it.
-    /// `/status` returns each actor's JSON snapshot keyed by name.
+    /// Enable the HTTP status API on the given port, bound to `127.0.0.1`.
+    /// `None` disables it. Use [`with_status_bind`] to bind to a different
+    /// address (e.g. `0.0.0.0` for remote access, with appropriate firewall
+    /// rules — the endpoint exposes positions and PnL).
     #[must_use]
     pub fn with_status_port(mut self, port: Option<u16>) -> Self {
-        self.status_port = port;
+        self.status_bind = port.map(|p| SocketAddr::from(([127, 0, 0, 1], p)));
+        self
+    }
+
+    /// Enable the HTTP status API on an explicit bind address.
+    #[must_use]
+    pub fn with_status_bind(mut self, addr: SocketAddr) -> Self {
+        self.status_bind = Some(addr);
         self
     }
 
@@ -332,7 +369,7 @@ impl HarnessBuilder {
             self.actors,
             Arc::new(registry),
             self.enable_signal,
-            self.status_port,
+            self.status_bind,
         ))
     }
 }

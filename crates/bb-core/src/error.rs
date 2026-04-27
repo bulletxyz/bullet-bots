@@ -33,8 +33,15 @@ impl BotError {
         matches!(self, BotError::Exchange { retryable: true, .. })
     }
 
+    /// A fatal error triggers harness shutdown. Non-retryable exchange errors,
+    /// strategy errors, and configuration errors are all fatal — there is no
+    /// sensible way to continue after them.
     pub fn is_fatal(&self) -> bool {
-        matches!(self, BotError::Config(_) | BotError::Shutdown)
+        match self {
+            BotError::Config(_) | BotError::Shutdown | BotError::Strategy(_) => true,
+            BotError::Exchange { retryable, .. } => !retryable,
+            _ => false,
+        }
     }
 
     pub fn exchange(e: impl fmt::Display, retryable: bool) -> Self {

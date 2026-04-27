@@ -11,6 +11,7 @@
 //!   5. Cancel subscription tasks, let them drain, call `wind_down` on every
 //!      actor with the reason.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -40,7 +41,7 @@ pub struct Harness {
     actors: Vec<Box<dyn ActorSpawn>>,
     brokers: Arc<BrokerRegistry>,
     enable_signal: bool,
-    status_port: Option<u16>,
+    status_bind: Option<SocketAddr>,
     bus: EventBus,
 }
 
@@ -50,14 +51,14 @@ impl Harness {
         actors: Vec<Box<dyn ActorSpawn>>,
         brokers: Arc<BrokerRegistry>,
         enable_signal: bool,
-        status_port: Option<u16>,
+        status_bind: Option<SocketAddr>,
     ) -> Self {
         Self {
             feeds,
             actors,
             brokers,
             enable_signal,
-            status_port,
+            status_bind,
             bus: EventBus::new(),
         }
     }
@@ -79,8 +80,12 @@ impl Harness {
             actor_handles.push(handle);
         }
 
-        // Status API: spawn only once the actor snapshots exist.
-        if let Some(port) = self.status_port {
+        // Status API: bind eagerly so a port-in-use error surfaces before init.
+        if let Some(addr) = self.status_bind {
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|e| crate::error::BotError::config(format!("status server bind {addr}: {e}")))?;
+            tracing::info!(%addr, "Status API listening");
             let state = Arc::new(StatusState {
                 start_time: Instant::now(),
                 actors: actor_handles
@@ -90,7 +95,7 @@ impl Harness {
             });
             // Detached — the server lives as a background task and is torn
             // down when the tokio runtime exits.
-            drop(spawn_server(port, state));
+            drop(spawn_server(listener, state));
         }
 
         // 2. Call each actor's init.

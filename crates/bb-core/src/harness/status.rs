@@ -5,7 +5,6 @@
 //! closure on request and returns the combined JSON. Calls are `try_lock`
 //! so a slow handler never blocks the status endpoint.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -51,7 +50,7 @@ async fn status(State(state): State<Arc<StatusState>>) -> Json<StatusResponse> {
 }
 
 pub(super) fn spawn_server(
-    port: u16,
+    listener: tokio::net::TcpListener,
     state: Arc<StatusState>,
 ) -> JoinHandle<Result<(), std::io::Error>> {
     let app = Router::new()
@@ -59,9 +58,6 @@ pub(super) fn spawn_server(
         .route("/status", get(status))
         .with_state(state);
     tokio::spawn(async move {
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        tracing::info!(%addr, "Status API listening");
         axum::serve(listener, app)
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))?;

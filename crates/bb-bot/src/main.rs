@@ -225,8 +225,8 @@ async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         .wire_actor(
             ActorSpec::new("grid", grid)
                 .sub::<BookUpdate>()
-                .sub::<Trade>()
-                .sub::<OrderLifecycle>()
+                .sub_critical::<Trade>()
+                .sub_critical::<OrderLifecycle>()
                 .sub::<Tick>(),
         )
         .build()?;
@@ -243,10 +243,23 @@ async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::er
     let (broker, feeds) = connect_bullet(&bullet_cfg, &strat_cfg.symbol).await?;
     let broker: Arc<dyn Broker> = Arc::new(broker);
 
+    // Optional reference feed (fair-value MM mode).
+    let reference = match strat_cfg.reference_exchange.as_deref() {
+        None => None,
+        Some("binance") => {
+            let symbol = strat_cfg.reference_symbol.as_deref().ok_or_else(|| {
+                "reference_exchange = \"binance\" requires reference_symbol".to_string()
+            })?;
+            let market: BinanceMarket = strat_cfg.reference_market.parse()?;
+            Some(connect_binance(symbol, market))
+        }
+        Some(other) => return Err(format!("Unknown reference_exchange: {other}").into()),
+    };
+
     let actor = AvellanedaStoikovActor::new(strat_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
+    let mut builder = HarnessBuilder::new()
         .enable_signal_shutdown()
         .with_status_port(config.engine.status_port)
         .wire_broker("bullet", broker)
@@ -254,15 +267,20 @@ async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::er
         .wire_feed_named("bullet-book", feeds.book)
         .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
         .wire_feed_named("bullet-mark", feeds.mark_price)
-        .wire_feed_named("ticks", tick)
-        .wire_actor(
-            ActorSpec::new("avellaneda-stoikov", actor)
-                .sub::<BookUpdate>()
-                .sub::<Trade>()
-                .sub::<OrderLifecycle>()
-                .sub::<Tick>(),
-        )
-        .build()?;
+        .wire_feed_named("ticks", tick);
+
+    let mut spec = ActorSpec::new("avellaneda-stoikov", actor)
+        .sub::<BookUpdate>()
+        .sub_critical::<Trade>()
+        .sub_critical::<OrderLifecycle>()
+        .sub::<Tick>();
+
+    if let Some(ref_feed) = reference {
+        builder = builder.wire_feed_named("binance-ref", ref_feed);
+        spec = spec.sub::<ReferencePriceUpdate>();
+    }
+
+    let harness = builder.wire_actor(spec).build()?;
     let reason = harness.run().await?;
     tracing::info!(?reason, "Harness wound down");
     Ok(())
@@ -299,7 +317,7 @@ async fn run_funding_arb(config: AppConfig) -> Result<(), Box<dyn std::error::Er
         .wire_actor(
             ActorSpec::new("funding-arb", actor)
                 .sub::<MarkPriceUpdate>()
-                .sub::<Trade>()
+                .sub_critical::<Trade>()
                 .sub::<BookUpdate>()
                 .sub::<Tick>(),
         )
@@ -334,8 +352,8 @@ async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::
             ActorSpec::new("reference-arb", actor)
                 .sub::<BookUpdate>()
                 .sub::<ReferencePriceUpdate>()
-                .sub::<Trade>()
-                .sub::<OrderLifecycle>()
+                .sub_critical::<Trade>()
+                .sub_critical::<OrderLifecycle>()
                 .sub::<Tick>(),
         )
         .build()?;

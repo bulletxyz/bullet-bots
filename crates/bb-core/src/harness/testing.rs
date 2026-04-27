@@ -8,6 +8,7 @@
 //! strategies that place orders during init and want to avoid a real RPC.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -37,6 +38,10 @@ impl<E: Event> EventFeed<E> for ScriptedFeed<E> {
     async fn run(self: Box<Self>, tx: EventTx<E>, _cx: FeedContext) -> Result<(), BotError> {
         for event in self.events {
             let _ = tx.send(event);
+            // Yield between events so actor handler tasks get scheduled before
+            // the next send. Without this, tests that assert on intermediate
+            // state are structurally flaky.
+            tokio::task::yield_now().await;
         }
         Ok(())
     }
@@ -56,11 +61,12 @@ pub struct RecordedCall {
 pub struct NullBroker {
     name: String,
     history: Mutex<Vec<RecordedCall>>,
+    next_order_id: AtomicU64,
 }
 
 impl NullBroker {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), history: Mutex::new(Vec::new()) }
+        Self { name: name.into(), history: Mutex::new(Vec::new()), next_order_id: AtomicU64::new(1) }
     }
 
     pub async fn history(&self) -> Vec<RecordedCall> {
@@ -108,7 +114,7 @@ impl Broker for NullBroker {
         Ok(orders
             .iter()
             .map(|o| OrderResult {
-                order_id: String::new(),
+                order_id: format!("test-{}", self.next_order_id.fetch_add(1, Ordering::Relaxed)),
                 client_id: o.client_id.clone(),
                 success: true,
                 error: None,
