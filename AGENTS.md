@@ -247,13 +247,18 @@ For the harness path:
    - `broker.rs` — implements `bb_core::broker::Broker` for REST.
    - `convert.rs` — value conversions.
    - `config.rs` — adapter-specific config (TOML-derived).
-2. Implement each `EventFeed<E>` by wrapping the typed receiver (the
-   `feed_impl!` macro in Bullet's `connection.rs` is a tidy pattern).
+2. Implement each `EventFeed<E>` by returning an `MpscFeed<E>` from
+   `connect_<name>`. See `crates/exchanges/bullet/src/connection.rs` for the
+   reference pattern — the muxer task writes to `mpsc::Sender<E>` channels
+   and `MpscFeed::new(rx)` wraps each receiver.
 3. In `bb-bot/src/main.rs`, add a match arm that calls
    `connect_<name>(&config, &symbol)` and wires the broker + feeds into the
    harness.
 
-The Bullet adapter is the reference; each piece is ~100 lines.
+The Bullet adapter is the reference. Each piece has a single responsibility:
+subscribe, broker, convert, config. See `docs/CONTRIBUTING-EXCHANGES.md` for
+the full walkthrough including reconnect patterns and the `Trade` /
+`OrderLifecycle` canonical-source invariant.
 
 ## Exchange-Specific Notes
 

@@ -9,9 +9,11 @@ perpetual futures DEX and other exchanges.
   shared helpers (`InventoryTracker`, `ClientIdIssuer`, `TickFeed`)
 - **bb-exchange-bullet** — Bullet DEX adapter — typed feeds + REST broker
 - **bb-exchange-hyperliquid** — Hyperliquid adapter — typed feeds + REST broker
+- **bb-exchange-binance** — Binance read-only reference price feed (no broker)
 - **bb-strategy-grid** — Static grid bot (fixed price range, anchor-biased)
-- **bb-strategy-avellaneda-stoikov** — A-S market maker actor
-- **bb-strategy-funding-arb** — Cross-venue funding arb actor
+- **bb-strategy-avellaneda-stoikov** — A-S market maker (single-venue or fair-value anchored)
+- **bb-strategy-funding-arb** — Cross-venue funding rate arb actor
+- **bb-strategy-reference-arb** — Cross-venue reference-price arb against Binance
 
 ## Architecture at a glance
 
@@ -32,8 +34,8 @@ events are structurally impossible.
 # Build
 cargo build
 
-# Run tests (57 passing)
-cargo test
+# Run tests
+cargo nextest run
 
 # Validate a config
 cargo run --bin bb-bot -- validate --config config/grid-example.toml
@@ -80,6 +82,17 @@ export BB_HYPERLIQUID_PRIVATE_KEY_HEX="0x..."
 cargo run --bin bb-bot -- run --config config/funding-arb-example.toml
 ```
 
+### Reference price arbitrage
+
+Monitors Bullet's mid vs. Binance perp's microprice. Enters a position
+when the spread exceeds `entry_threshold_bps` for `persistence_ticks`
+consecutive ticks, and exits on TP, SL, or timeout.
+
+```sh
+export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+cargo run --bin bb-bot -- run --config config/reference-arb-example.toml
+```
+
 ## Writing your own strategy
 
 1. Create a crate in `crates/strategies/<name>/`.
@@ -92,10 +105,30 @@ Full walkthrough: [HACKING.md](HACKING.md).
 ## Status API
 
 While running, the bot exposes an HTTP status endpoint on `engine.status_port`
-(default 3030):
+(default 3030, bound to `127.0.0.1`):
 
 - `GET /health` — liveness check
 - `GET /status` — uptime plus every actor's JSON snapshot keyed by name
+
+To expose on a non-loopback address (e.g. for remote monitoring), set
+`engine.status_bind = "0.0.0.0:3030"` — note that the endpoint exposes
+positions and PnL, so firewall accordingly.
+
+## Intentionally out of scope
+
+The following are explicit non-goals for v1 — listing them reduces issues
+and clarifies where to build extensions:
+
+- **Backtest / replay harness** — The framework ships `Clock` / `MockBroker` /
+  `ScriptedFeed` test primitives; a full fill-simulation engine is not provided.
+- **Persistence / crash recovery / journal** — No event log or replay on restart.
+- **Prometheus metrics** — No `/metrics` endpoint; `/status` is JSON-only.
+- **Rate limiting** — Each broker manages its own rate limit; the framework has no
+  built-in token-bucket or request queue.
+- **Instrument validation** — No tick-size / lot-size / min-notional rounding;
+  strategies post raw prices and the venue rejects bad ones.
+- **Extended `OrderType`** — `Limit`, `PostOnly`, `Market` only. No IOC, FOK, GTD,
+  or `time_in_force` plumbing beyond what the adapters already need.
 
 ## Requirements
 
