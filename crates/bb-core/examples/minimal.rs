@@ -6,7 +6,9 @@
 use async_trait::async_trait;
 use bb_core::error::BotError;
 use bb_core::events::Tick;
-use bb_core::harness::{Actor, ActorContext, ActorSpec, EventHandler, HarnessBuilder, WindDownReason};
+use bb_core::harness::{
+    Actor, ActorContext, ActorSpec, EventHandler, HarnessBuilder, WindDownReason,
+};
 use bb_core::helpers::TickFeed;
 
 struct Counter {
@@ -21,7 +23,11 @@ impl Actor for Counter {
         Ok(())
     }
 
-    async fn wind_down(&mut self, reason: &WindDownReason, _cx: &ActorContext) -> Result<(), BotError> {
+    async fn wind_down(
+        &mut self,
+        reason: &WindDownReason,
+        _cx: &ActorContext,
+    ) -> Result<(), BotError> {
         tracing::info!(count = self.count, ?reason, "Counter stopped");
         Ok(())
     }
@@ -45,10 +51,7 @@ async fn main() -> Result<(), BotError> {
 
     let harness = HarnessBuilder::new()
         .wire_feed_named("ticks", TickFeed::every_ms(100))
-        .wire_actor(
-            ActorSpec::new("counter", Counter { count: 0, limit: 5 })
-                .sub::<Tick>(),
-        )
+        .wire_actor(ActorSpec::new("counter", Counter { count: 0, limit: 5 }).sub::<Tick>())
         .build()?;
 
     let reason = harness.run().await?;

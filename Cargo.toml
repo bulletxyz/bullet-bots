@@ -43,8 +43,7 @@ bb-strategy-avellaneda-stoikov = { path = "crates/strategies/avellaneda-stoikov"
 bb-strategy-reference-arb = { path = "crates/strategies/reference-arb" }
 
 # Bullet SDK
-# For release: bullet-rust-sdk = { git = "https://github.com/bulletxyz/bullet-rust-sdk.git", rev = "..." }
-bullet-rust-sdk = { path = "../bullet-rust-sdk/rust", default-features = false }
+bullet-rust-sdk = { git = "https://github.com/bulletxyz/bullet-rust-sdk.git", default-features = false }
 
 # Hyperliquid SDK
 hyperliquid_rust_sdk = "0.6"

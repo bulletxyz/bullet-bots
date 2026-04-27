@@ -7,15 +7,13 @@ use serde::Deserialize;
 ///
 /// Key material can be supplied two ways, in this preference order:
 ///
-/// 1. **`key_file`** — path to a Solana-compatible JSON keystore (as produced
-///    by `bb-bot keygen` or `solana-keygen`). Preferred: the key lives on
-///    disk with whatever permissions the filesystem enforces, never hits
-///    the shell history, and isn't trivially exfiltrated via a process
+/// 1. **`key_file`** — path to a Solana-compatible JSON keystore (as produced by `bb-bot keygen` or
+///    `solana-keygen`). Preferred: the key lives on disk with whatever permissions the filesystem
+///    enforces, never hits the shell history, and isn't trivially exfiltrated via a process
 ///    environment dump.
-/// 2. **`private_key_hex`** — Ed25519 secret as a hex string. Wrapped in
-///    [`SecretString`] so it's redacted in `Debug` output and zeroed on drop.
-///    Still supported for CI / ephemeral contexts; the env var
-///    `BB_BULLET_PRIVATE_KEY_HEX` populates this field.
+/// 2. **`private_key_hex`** — Ed25519 secret as a hex string. Wrapped in [`SecretString`] so it's
+///    redacted in `Debug` output and zeroed on drop. Still supported for CI / ephemeral contexts;
+///    the env var `BB_BULLET_PRIVATE_KEY_HEX` populates this field.
 ///
 /// If both are set, `key_file` wins.
 #[derive(Debug, Clone, Deserialize)]
@@ -40,8 +38,9 @@ fn default_secret() -> SecretString {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use secrecy::ExposeSecret;
+
+    use super::*;
 
     const FAKE_KEY: &str = "deadbeefcafef00d0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -59,10 +58,12 @@ mod tests {
 
     #[test]
     fn deserializes_from_toml_string() {
-        let toml_src = format!(r#"
+        let toml_src = format!(
+            r#"
             network = "testnet"
             private_key_hex = "{FAKE_KEY}"
-        "#);
+        "#
+        );
         let cfg: BulletConfig = toml::from_str(&toml_src).expect("parse");
         assert_eq!(cfg.private_key_hex.expose_secret(), FAKE_KEY);
         assert!(cfg.key_file.is_none());

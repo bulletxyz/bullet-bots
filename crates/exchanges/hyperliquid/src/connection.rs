@@ -3,15 +3,15 @@
 //! typed per-event channels.
 //!
 //! Canonical sources:
-//!   - `Message::UserFills` → `Trade` (one per execution, authoritative source
-//!     of position changes).
-//!   - `Message::OrderUpdates` → `OrderLifecycle` (status transitions, used
-//!     for reconcile and client_id → oid resolution).
+//!   - `Message::UserFills` → `Trade` (one per execution, authoritative source of position
+//!     changes).
+//!   - `Message::OrderUpdates` → `OrderLifecycle` (status transitions, used for reconcile and
+//!     client_id → oid resolution).
 //!   - `Message::L2Book` → `BookUpdate`.
-//!   - `Message::ActiveAssetCtx` → `MarkPriceUpdate` (carries both mark_px
-//!     and funding — fixes the longstanding "funding is always zero" gap).
-//!   - `Message::AllMids` → `MarkPriceUpdate` (fallback with funding_rate=0
-//!     until the per-coin `ActiveAssetCtx` arrives).
+//!   - `Message::ActiveAssetCtx` → `MarkPriceUpdate` (carries both mark_px and funding — fixes the
+//!     longstanding "funding is always zero" gap).
+//!   - `Message::AllMids` → `MarkPriceUpdate` (fallback with funding_rate=0 until the per-coin
+//!     `ActiveAssetCtx` arrives).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -24,7 +24,7 @@ use ethers::signers::{LocalWallet, Signer};
 use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
 use tokio::sync::mpsc;
 
-use crate::broker::{ConnectionHealth, HyperliquidBroker};
+use crate::broker::{ConnectionHealth, HyperliquidBroker, new_client_id_map};
 use crate::config::HyperliquidConfig;
 use crate::convert;
 
@@ -54,22 +54,19 @@ pub async fn connect(
 ) -> Result<(HyperliquidBroker, HyperliquidFeeds), BotError> {
     let raw_key = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
     let key_hex = raw_key.strip_prefix("0x").unwrap_or(raw_key.as_str());
-    let wallet: LocalWallet = key_hex
-        .parse()
-        .map_err(|e| BotError::config(format!("Invalid HL private key: {e}")))?;
+    let wallet: LocalWallet =
+        key_hex.parse().map_err(|e| BotError::config(format!("Invalid HL private key: {e}")))?;
     let address = wallet.address();
     let base_url = match config.network.as_str() {
         "mainnet" => BaseUrl::Mainnet,
         _ => BaseUrl::Testnet,
     };
 
-    let exchange_client =
-        ExchangeClient::new(None, wallet.clone(), Some(base_url), None, None)
-            .await
-            .map_err(|e| BotError::exchange(e, true))?;
-    let info = InfoClient::new(None, Some(base_url))
+    let exchange_client = ExchangeClient::new(None, wallet.clone(), Some(base_url), None, None)
         .await
         .map_err(|e| BotError::exchange(e, true))?;
+    let info =
+        InfoClient::new(None, Some(base_url)).await.map_err(|e| BotError::exchange(e, true))?;
 
     // Separate InfoClient for WS (needs `with_reconnect` and stays alive in the
     // muxer task). The REST `info` above is kept on the broker for queries.
@@ -104,6 +101,8 @@ pub async fn connect(
     // userspace — so we infer reconnects from message-stream gaps.
     let health = Arc::new(ConnectionHealth::default());
     let muxer_health = Arc::clone(&health);
+    let client_ids = new_client_id_map();
+    let muxer_client_ids = Arc::clone(&client_ids);
 
     let target_coin = coin.clone();
     tokio::spawn(async move {
@@ -168,12 +167,13 @@ pub async fn connect(
                         } else {
                             last_order_timestamp = update.status_timestamp;
                         }
-                        let _ = life_tx.send(convert::order_update_to_lifecycle(update));
+                        let _ = life_tx
+                            .send(convert::order_update_to_lifecycle(update, &muxer_client_ids));
                     }
                 }
                 Message::UserFills(f) => {
                     for fill in f.data.fills.iter().filter(|f| f.coin == target_coin) {
-                        if let Some(trade) = convert::fill_to_trade(fill) {
+                        if let Some(trade) = convert::fill_to_trade(fill, &muxer_client_ids) {
                             let _ = trade_tx.send(trade);
                         }
                     }
@@ -203,7 +203,7 @@ pub async fn connect(
         tracing::warn!("Hyperliquid: WS muxer ended");
     });
 
-    let broker = HyperliquidBroker::new(exchange_client, info, address, health);
+    let broker = HyperliquidBroker::new(exchange_client, info, address, health, client_ids);
     let feeds = HyperliquidFeeds {
         trade: MpscFeed::new(trade_rx),
         book: MpscFeed::bounded(book_rx),

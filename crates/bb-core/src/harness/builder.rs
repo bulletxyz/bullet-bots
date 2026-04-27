@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -73,6 +73,7 @@ pub(super) trait ActorSpawn: Send {
         brokers: Arc<BrokerRegistry>,
         clock: Arc<dyn Clock>,
         shutdown: CancellationToken,
+        actor_failures: mpsc::UnboundedSender<WindDownReason>,
     ) -> ActorHandle;
 }
 
@@ -86,11 +87,7 @@ pub struct ActorSpec<A: Actor> {
 
 impl<A: Actor> ActorSpec<A> {
     pub fn new(name: impl Into<Arc<str>>, actor: A) -> Self {
-        Self {
-            name: name.into(),
-            actor: Arc::new(Mutex::new(actor)),
-            subscriptions: Vec::new(),
-        }
+        Self { name: name.into(), actor: Arc::new(Mutex::new(actor)), subscriptions: Vec::new() }
     }
 
     /// Subscribe this actor to events of type `E`. Requires the actor to
@@ -135,6 +132,7 @@ struct SubscriptionFactory<A: Actor> {
                 &EventBus,
                 Arc<ActorContext>,
                 CancellationToken,
+                mpsc::UnboundedSender<WindDownReason>,
             ) -> JoinHandle<()>
             + Send,
     >,
@@ -150,7 +148,8 @@ impl<A: Actor> SubscriptionFactory<A> {
             move |actor: Arc<Mutex<A>>,
                   bus: &EventBus,
                   ctx: Arc<ActorContext>,
-                  cancel: CancellationToken| {
+                  cancel: CancellationToken,
+                  actor_failures: mpsc::UnboundedSender<WindDownReason>| {
                 let mut rx = bus.subscribe::<E>();
                 tokio::spawn(async move {
                     loop {
@@ -179,6 +178,10 @@ impl<A: Actor> SubscriptionFactory<A> {
                                             );
                                         }
                                         if e.is_fatal() {
+                                            let _ = actor_failures.send(WindDownReason::ActorFailed {
+                                                actor: ctx.actor_name().to_string(),
+                                                error: e.to_string(),
+                                            });
                                             ctx.request_shutdown();
                                             break;
                                         }
@@ -191,6 +194,12 @@ impl<A: Actor> SubscriptionFactory<A> {
                                             lagged = n,
                                             "actor lagged on critical event stream — shutting down"
                                         );
+                                        let _ = actor_failures.send(WindDownReason::ActorFailed {
+                                            actor: ctx.actor_name().to_string(),
+                                            error: format!(
+                                                "lagged on critical event stream by {n} messages"
+                                            ),
+                                        });
                                         ctx.request_shutdown();
                                         break;
                                     } else {
@@ -223,6 +232,7 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
         brokers: Arc<BrokerRegistry>,
         clock: Arc<dyn Clock>,
         shutdown: CancellationToken,
+        actor_failures: mpsc::UnboundedSender<WindDownReason>,
     ) -> ActorHandle {
         let ctx = Arc::new(ActorContext::with_clock(self.name.clone(), brokers, clock, shutdown));
         let name = self.name.clone();
@@ -236,6 +246,7 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
                 bus,
                 Arc::clone(&ctx),
                 sub_cancel.clone(),
+                actor_failures.clone(),
             ));
         }
 
@@ -367,11 +378,7 @@ impl HarnessBuilder {
     /// Register a broker (REST/order-placement handle) under a name.
     /// Actors look it up via `cx.brokers().get("<name>")`.
     #[must_use]
-    pub fn wire_broker(
-        mut self,
-        name: impl Into<Arc<str>>,
-        broker: Arc<dyn Broker>,
-    ) -> Self {
+    pub fn wire_broker(mut self, name: impl Into<Arc<str>>, broker: Arc<dyn Broker>) -> Self {
         self.brokers.push((name.into(), broker));
         self
     }

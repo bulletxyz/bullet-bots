@@ -56,21 +56,18 @@ pub trait Broker: Send + Sync + 'static {
     // -- Order management -----------------------------------------------------
     //
     // Error semantics:
-    //   - `Err(BotError)` on the outer `Result` means a transport/system
-    //     failure — the whole call failed before any order reached the venue.
-    //   - `Ok(results)` with `OrderResult.success = false` means the venue
-    //     rejected a specific order (bad price, insufficient margin, etc.).
-    //     Other orders in the batch may have succeeded.
+    //   - `Err(BotError)` on the outer `Result` means a transport/system failure — the whole call
+    //     failed before any order reached the venue.
+    //   - `Ok(results)` with `OrderResult.success = false` means the venue rejected a specific
+    //     order (bad price, insufficient margin, etc.). Other orders in the batch may have
+    //     succeeded.
     //
     // `OrderResult.order_id` is `Some(id)` when the venue confirms the order
     // synchronously. `None` means outcome unknown — listen on the lifecycle
     // stream (`OrderLifecycle`) for confirmation.
 
     async fn place_orders(&self, orders: &[NewOrder]) -> Result<Vec<OrderResult>, BotError>;
-    async fn cancel_orders(
-        &self,
-        cancels: &[CancelOrder],
-    ) -> Result<Vec<CancelResult>, BotError>;
+    async fn cancel_orders(&self, cancels: &[CancelOrder]) -> Result<Vec<CancelResult>, BotError>;
     async fn cancel_all_orders(&self, symbol: &str) -> Result<(), BotError>;
 
     /// Amend live quotes. Each entry pairs a cancel with a new placement.
@@ -101,11 +98,7 @@ impl BrokerRegistry {
         Self::default()
     }
 
-    pub fn insert(
-        &mut self,
-        name: Arc<str>,
-        broker: Arc<dyn Broker>,
-    ) -> Result<(), BotError> {
+    pub fn insert(&mut self, name: Arc<str>, broker: Arc<dyn Broker>) -> Result<(), BotError> {
         if self.by_name.contains_key(&name) {
             return Err(BotError::config(format!("duplicate broker name: {name}")));
         }

@@ -187,13 +187,8 @@ fn parse_ticker(text: &str) -> Result<ReferencePriceUpdate, String> {
         // ask-size → trade likely to lift, fair value tilts toward ask).
         (bid * ask_size + ask * bid_size) / total
     };
-    Ok(ReferencePriceUpdate {
-        symbol: tick.symbol,
-        mid,
-        received_at: Instant::now(),
-    })
+    Ok(ReferencePriceUpdate { symbol: tick.symbol, mid, received_at: Instant::now() })
 }
-
 
 #[cfg(test)]
 mod tests {

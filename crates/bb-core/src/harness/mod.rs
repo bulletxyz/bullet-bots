@@ -16,24 +16,21 @@
 //!
 //! # Four concepts
 //!
-//! - **Event** — any `Clone + Debug + Send + 'static` value. One Rust type
-//!   per kind of world change. See [`crate::events`] for the canonical set
-//!   (`Trade`, `OrderLifecycle`, `BookUpdate`, `MarkPriceUpdate`, `Tick`).
+//! - **Event** — any `Clone + Debug + Send + 'static` value. One Rust type per kind of world
+//!   change. See [`crate::events`] for the canonical set (`Trade`, `OrderLifecycle`, `BookUpdate`,
+//!   `MarkPriceUpdate`, `Tick`).
 //!
-//! - **Feed** — an async task that publishes events of a single type. Feeds
-//!   own their upstream (e.g., a WebSocket) and handle their own
-//!   reconnection. Exchange adapters expose one feed per event type they
-//!   can produce. Implement [`EventFeed<E>`].
+//! - **Feed** — an async task that publishes events of a single type. Feeds own their upstream
+//!   (e.g., a WebSocket) and handle their own reconnection. Exchange adapters expose one feed per
+//!   event type they can produce. Implement [`EventFeed<E>`].
 //!
-//! - **Actor** — a stateful consumer. Every strategy is one actor.
-//!   Implements [`Actor`] for lifecycle (`init` / `wind_down` / `status`)
-//!   plus [`EventHandler<E>`] once per event type it subscribes to. The
-//!   harness guards each actor with a mutex so handler calls never overlap.
+//! - **Actor** — a stateful consumer. Every strategy is one actor. Implements [`Actor`] for
+//!   lifecycle (`init` / `wind_down` / `status`) plus [`EventHandler<E>`] once per event type it
+//!   subscribes to. The harness guards each actor with a mutex so handler calls never overlap.
 //!
-//! - **Harness** — the coordinator. Builds the bus, spawns feed tasks,
-//!   spawns one task per actor subscription, routes published events to
-//!   subscribers, and drives the init → event → wind_down lifecycle with
-//!   a clean shutdown model ([`WindDownReason`]).
+//! - **Harness** — the coordinator. Builds the bus, spawns feed tasks, spawns one task per actor
+//!   subscription, routes published events to subscribers, and drives the init → event → wind_down
+//!   lifecycle with a clean shutdown model ([`WindDownReason`]).
 //!
 //! # Canonical-source invariant
 //!

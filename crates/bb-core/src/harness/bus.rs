@@ -48,9 +48,7 @@ impl EventBus {
     /// Build a bus with the given per-type capacity overrides. Types not in
     /// the map use [`DEFAULT_CAPACITY`].
     pub fn with_capacities(capacities: HashMap<TypeId, usize>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Inner { channels: HashMap::new(), capacities })),
-        }
+        Self { inner: Arc::new(Mutex::new(Inner { channels: HashMap::new(), capacities })) }
     }
 
     /// Obtain a sender for events of type `E`. The first call for a given `E`
@@ -58,18 +56,16 @@ impl EventBus {
     /// clones of the same sender.
     pub fn sender<E: Event>(&self) -> broadcast::Sender<E> {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let cap = guard
-            .capacities
-            .get(&TypeId::of::<E>())
-            .copied()
-            .unwrap_or(DEFAULT_CAPACITY);
+        let cap = guard.capacities.get(&TypeId::of::<E>()).copied().unwrap_or(DEFAULT_CAPACITY);
         let entry = guard
             .channels
             .entry(TypeId::of::<E>())
             .or_insert_with(|| Box::new(broadcast::channel::<E>(cap).0));
         entry
             .downcast_ref::<broadcast::Sender<E>>()
-            .unwrap_or_else(|| unreachable!("EventBus: TypeId collision — impossible with monomorphized E"))
+            .unwrap_or_else(|| {
+                unreachable!("EventBus: TypeId collision — impossible with monomorphized E")
+            })
             .clone()
     }
 

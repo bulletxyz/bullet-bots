@@ -6,7 +6,6 @@
 //! cancellation signal. When the shutdown trigger fires, feeds are expected
 //! to observe `cx.cancelled()` and return promptly.
 
-
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -88,11 +87,10 @@ impl<E> RxKind<E> {
 /// into the bus until cancelled or the sender drops.
 ///
 /// Supports both unbounded and bounded mpsc channels:
-/// - [`MpscFeed::new`] — unbounded; safe for critical streams (`Trade`,
-///   `OrderLifecycle`) where dropping events is not acceptable.
-/// - [`MpscFeed::bounded`] — bounded; use for `BookUpdate` / `MarkPriceUpdate`
-///   where the muxer uses `try_send` and drops-newest on overflow. The
-///   muxer is responsible for overflow logging.
+/// - [`MpscFeed::new`] — unbounded; safe for critical streams (`Trade`, `OrderLifecycle`) where
+///   dropping events is not acceptable.
+/// - [`MpscFeed::bounded`] — bounded; use for `BookUpdate` / `MarkPriceUpdate` where the muxer uses
+///   `try_send` and drops-newest on overflow. The muxer is responsible for overflow logging.
 pub struct MpscFeed<E: Event> {
     rx: RxKind<E>,
 }

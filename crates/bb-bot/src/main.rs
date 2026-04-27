@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bb_core::broker::Broker;
 use bb_core::config::EngineConfig;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Tick, Trade};
@@ -21,7 +22,6 @@ use bb_strategy_avellaneda_stoikov::{AvellanedaStoikovActor, AvellanedaStoikovCo
 use bb_strategy_funding_arb::{FundingArbActor, FundingArbConfig};
 use bb_strategy_grid::{GridActor, GridConfig};
 use bb_strategy_reference_arb::{ReferenceArbActor, ReferenceArbConfig};
-use async_trait::async_trait;
 use bullet_rust_sdk::types::bullet_exchange_interface;
 use bullet_rust_sdk::{
     CallMessage, Client, Keypair, Network, PositiveDecimal, Transaction, UserAction,
@@ -173,13 +173,11 @@ fn parse_exchange_config<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    let entry = entries
-        .get(name)
-        .ok_or_else(|| format!("Missing required [exchanges.{name}] section"))?;
+    let entry =
+        entries.get(name).ok_or_else(|| format!("Missing required [exchanges.{name}] section"))?;
     let raw = strip_type_key(entry.config.clone());
-    let cfg: T = raw
-        .try_into()
-        .map_err(|e: toml::de::Error| format!("Invalid {name} config: {e}"))?;
+    let cfg: T =
+        raw.try_into().map_err(|e: toml::de::Error| format!("Invalid {name} config: {e}"))?;
     Ok(cfg)
 }
 
@@ -190,14 +188,9 @@ fn sub_strategy<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    let sub = strategy
-        .config
-        .get(sub_name)
-        .cloned()
-        .unwrap_or_else(|| strategy.config.clone());
-    let parsed: T = sub
-        .try_into()
-        .map_err(|e: toml::de::Error| format!("Invalid {sub_name} config: {e}"))?;
+    let sub = strategy.config.get(sub_name).cloned().unwrap_or_else(|| strategy.config.clone());
+    let parsed: T =
+        sub.try_into().map_err(|e: toml::de::Error| format!("Invalid {sub_name} config: {e}"))?;
     Ok(parsed)
 }
 
@@ -237,8 +230,7 @@ async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let bullet_cfg: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
-    let strat_cfg: AvellanedaStoikovConfig =
-        sub_strategy(&config.strategy, "avellaneda-stoikov")?;
+    let strat_cfg: AvellanedaStoikovConfig = sub_strategy(&config.strategy, "avellaneda-stoikov")?;
 
     let (broker, feeds) = connect_bullet(&bullet_cfg, &strat_cfg.symbol).await?;
     let broker: Arc<dyn Broker> = Arc::new(broker);
@@ -383,8 +375,7 @@ fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         }
         "avellaneda-stoikov" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
-            let _: AvellanedaStoikovConfig =
-                sub_strategy(&config.strategy, "avellaneda-stoikov")?;
+            let _: AvellanedaStoikovConfig = sub_strategy(&config.strategy, "avellaneda-stoikov")?;
         }
         "funding-arb" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
@@ -394,8 +385,7 @@ fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         "reference-arb" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
             let cfg: ReferenceArbConfig = sub_strategy(&config.strategy, "reference-arb")?;
-            cfg.validate()
-                .map_err(|e| format!("reference-arb config invalid: {e}"))?;
+            cfg.validate().map_err(|e| format!("reference-arb config invalid: {e}"))?;
         }
         other => return Err(format!("Unknown strategy type: {other}").into()),
     }
@@ -503,11 +493,8 @@ async fn deposit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let keypair = load_deposit_keypair()?;
     let address = keypair.address();
-    let client = Client::builder()
-        .network(Network::from(network.as_str()))
-        .keypair(keypair)
-        .build()
-        .await?;
+    let client =
+        Client::builder().network(Network::from(network.as_str())).keypair(keypair).build().await?;
 
     let info = client.exchange_info().await?.into_inner();
     let asset_entry = info
@@ -517,13 +504,10 @@ async fn deposit(
         .ok_or_else(|| format!("Unknown asset '{asset}' — not in exchangeInfo"))?;
 
     let asset_id = bullet_exchange_interface::types::AssetId(asset_entry.asset_id);
-    let positive = PositiveDecimal::try_from(amount)
-        .map_err(|e| format!("Invalid deposit amount: {e}"))?;
+    let positive =
+        PositiveDecimal::try_from(amount).map_err(|e| format!("Invalid deposit amount: {e}"))?;
 
-    println!(
-        "Depositing {amount} {asset} (asset_id={}) from {address}",
-        asset_entry.asset_id
-    );
+    println!("Depositing {amount} {asset} (asset_id={}) from {address}", asset_entry.asset_id);
 
     let call_msg = CallMessage::User(UserAction::Deposit { asset_id, amount: positive });
     let signed = Transaction::builder().call_message(call_msg).client(&client).build()?;
@@ -580,7 +564,10 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
         Side::Sell => book.best_bid().map(|l| l.price),
     }
     .ok_or("Orderbook has no opposing-side liquidity — cannot flatten")?;
-    let slip = Decimal::from(1) / Decimal::from(100); // 1%
+    // 1% worst-case price — generous for a manual utility command;
+    // the IoC ensures we actually fill at or better than top-of-book.
+    const FLATTEN_SLIPPAGE_BPS: u64 = 100;
+    let slip = Decimal::from(FLATTEN_SLIPPAGE_BPS) / Decimal::from(10_000);
     let ioc_price = match close_side {
         Side::Buy => base * (Decimal::ONE + slip),
         Side::Sell => base * (Decimal::ONE - slip),
@@ -624,7 +611,11 @@ struct ObserverActor {
 }
 
 impl ObserverActor {
-    fn new(symbol: String, binance_symbol: String, path: &std::path::Path) -> std::io::Result<Self> {
+    fn new(
+        symbol: String,
+        binance_symbol: String,
+        path: &std::path::Path,
+    ) -> std::io::Result<Self> {
         use std::io::Write;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -802,13 +793,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Keygen { network, out } => keygen(network, out),
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,
         Command::Flatten { network, symbol } => flatten(network, symbol).await,
-        Command::Observe {
-            network,
-            symbol,
-            binance_symbol,
-            binance_market,
-            output,
-        } => observe(network, symbol, binance_symbol, binance_market, output).await,
+        Command::Observe { network, symbol, binance_symbol, binance_market, output } => {
+            observe(network, symbol, binance_symbol, binance_market, output).await
+        }
         Command::Validate { config: path } => validate(load_config(&path)?),
         Command::Run { config: path } => {
             let config = load_config(&path)?;

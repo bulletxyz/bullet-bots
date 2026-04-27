@@ -305,8 +305,11 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::error::BotError;
     use crate::events::Tick;
-    use crate::harness::{Actor, ActorContext, ActorSpec, EventHandler, HarnessBuilder};
+    use crate::harness::{
+        Actor, ActorContext, ActorSpec, EventHandler, HarnessBuilder, WindDownReason,
+    };
 
     struct TimestampCollector {
         seen: Arc<Mutex<Vec<u64>>>,
@@ -332,11 +335,7 @@ mod tests {
         let clock = TestClock::new(0);
         let seen: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
 
-        let ticks = vec![
-            (1_000u64, Tick::now()),
-            (2_000u64, Tick::now()),
-            (3_000u64, Tick::now()),
-        ];
+        let ticks = vec![(1_000u64, Tick::now()), (2_000u64, Tick::now()), (3_000u64, Tick::now())];
         let feed = MarketDataReplayFeed::new(ticks, clock.clone());
 
         let actor = TimestampCollector { seen: Arc::clone(&seen) };
@@ -351,5 +350,46 @@ mod tests {
 
         let got = seen.lock().unwrap().clone();
         assert_eq!(got, vec![1_000, 2_000, 3_000]);
+    }
+
+    struct OneTickThenWait;
+
+    #[async_trait]
+    impl EventFeed<Tick> for OneTickThenWait {
+        async fn run(self: Box<Self>, tx: EventTx<Tick>, cx: FeedContext) -> Result<(), BotError> {
+            let _ = tx.send(Tick::now());
+            cx.cancelled().await;
+            Ok(())
+        }
+    }
+
+    struct FailingActor;
+
+    #[async_trait]
+    impl Actor for FailingActor {}
+
+    #[async_trait]
+    impl EventHandler<Tick> for FailingActor {
+        async fn on_event(&mut self, _event: Tick, _cx: &ActorContext) -> Result<(), BotError> {
+            Err(BotError::strategy("boom"))
+        }
+    }
+
+    #[tokio::test]
+    async fn fatal_handler_error_reports_actor_failed() {
+        let harness = HarnessBuilder::new()
+            .wire_feed_named("tick", OneTickThenWait)
+            .wire_actor(ActorSpec::new("failing", FailingActor).sub::<Tick>())
+            .build()
+            .unwrap();
+
+        let reason = harness.run().await.unwrap();
+        match reason {
+            WindDownReason::ActorFailed { actor, error } => {
+                assert_eq!(actor, "failing");
+                assert!(error.contains("boom"));
+            }
+            other => panic!("expected ActorFailed, got {other:?}"),
+        }
     }
 }

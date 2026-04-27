@@ -28,11 +28,7 @@ impl TickFeed {
 
 #[async_trait]
 impl EventFeed<Tick> for TickFeed {
-    async fn run(
-        self: Box<Self>,
-        tx: EventTx<Tick>,
-        cx: FeedContext,
-    ) -> Result<(), BotError> {
+    async fn run(self: Box<Self>, tx: EventTx<Tick>, cx: FeedContext) -> Result<(), BotError> {
         let mut ticker = interval(self.period);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {

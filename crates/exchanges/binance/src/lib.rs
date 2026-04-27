@@ -10,5 +10,5 @@
 
 pub mod feed;
 
-pub use feed::{BinanceMarket, ReferencePriceUpdate, connect_binance};
 pub use bb_core::harness::MpscFeed;
+pub use feed::{BinanceMarket, ReferencePriceUpdate, connect_binance};

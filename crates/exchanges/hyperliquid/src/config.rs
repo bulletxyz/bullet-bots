@@ -24,8 +24,9 @@ fn default_secret() -> SecretString {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use secrecy::ExposeSecret;
+
+    use super::*;
 
     const FAKE_KEY: &str = "0xdeadbeefcafef00d0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -42,10 +43,12 @@ mod tests {
 
     #[test]
     fn deserializes_from_toml_string() {
-        let toml_src = format!(r#"
+        let toml_src = format!(
+            r#"
             network = "testnet"
             private_key_hex = "{FAKE_KEY}"
-        "#);
+        "#
+        );
         let cfg: HyperliquidConfig = toml::from_str(&toml_src).expect("parse");
         assert_eq!(cfg.private_key_hex.expose_secret(), FAKE_KEY);
     }

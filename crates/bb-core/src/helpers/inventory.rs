@@ -11,7 +11,7 @@
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::types::Side;
+use crate::types::{Position, Side};
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct InventoryTracker {
@@ -50,8 +50,7 @@ impl InventoryTracker {
             let old_abs = self.net_position.abs();
             let add_abs = signed_qty.abs();
             let new_abs = old_abs + add_abs;
-            self.avg_entry_price =
-                (self.avg_entry_price * old_abs + price * add_abs) / new_abs;
+            self.avg_entry_price = (self.avg_entry_price * old_abs + price * add_abs) / new_abs;
             self.net_position += signed_qty;
             return Decimal::ZERO;
         }
@@ -79,12 +78,25 @@ impl InventoryTracker {
     pub fn is_flat(&self) -> bool {
         self.net_position.is_zero()
     }
+
+    /// Seed the tracker from a venue-reported position, typically at strategy
+    /// startup after reconnecting/restarting with existing exposure.
+    pub fn seed_from_position(&mut self, position: &Position) {
+        self.net_position = match position.side {
+            Some(Side::Buy) => position.size,
+            Some(Side::Sell) => -position.size,
+            None => Decimal::ZERO,
+        };
+        self.avg_entry_price =
+            if self.net_position.is_zero() { Decimal::ZERO } else { position.entry_price };
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rust_decimal::prelude::FromPrimitive;
+
+    use super::*;
 
     fn d(s: &str) -> Decimal {
         s.parse().unwrap()
@@ -158,5 +170,20 @@ mod tests {
         inv.record_fill(Side::Buy, Decimal::from_f64(100.5).unwrap(), d("0.5"));
         inv.record_fill(Side::Buy, Decimal::from_f64(101.5).unwrap(), d("0.5"));
         assert_eq!(inv.avg_entry_price, Decimal::from_f64(101.0).unwrap());
+    }
+
+    #[test]
+    fn seed_from_position_sets_signed_inventory() {
+        let mut inv = InventoryTracker::new();
+        inv.seed_from_position(&Position {
+            symbol: "BTC-USD".into(),
+            side: Some(Side::Sell),
+            size: d("0.5"),
+            entry_price: d("100"),
+            unrealized_pnl: Decimal::ZERO,
+        });
+
+        assert_eq!(inv.net_position, d("-0.5"));
+        assert_eq!(inv.avg_entry_price, d("100"));
     }
 }

@@ -37,8 +37,9 @@ impl Ema {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     #[test]
     fn seed_and_converge() {

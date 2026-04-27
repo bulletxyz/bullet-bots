@@ -103,13 +103,23 @@ impl ReferenceArbConfig {
             return Err("max_position must be >= order_size".into());
         }
         if self.entry_threshold_bps <= self.exit_threshold_bps {
-            return Err("entry_threshold_bps must be > exit_threshold_bps (else TP never triggers)".into());
+            return Err(
+                "entry_threshold_bps must be > exit_threshold_bps (else TP never triggers)".into(),
+            );
         }
         if self.stop_loss_bps <= self.entry_threshold_bps {
-            return Err("stop_loss_bps must be > entry_threshold_bps (else SL triggers at entry)".into());
+            return Err(
+                "stop_loss_bps must be > entry_threshold_bps (else SL triggers at entry)".into()
+            );
         }
         if self.persistence_ticks == 0 {
             return Err("persistence_ticks must be >= 1".into());
+        }
+        if self.reference_stale_secs == 0 {
+            return Err("reference_stale_secs must be >= 1 (0 makes every reference update immediately stale)".into());
+        }
+        if self.market_slippage_bps <= Decimal::ZERO {
+            return Err("market_slippage_bps must be positive".into());
         }
         if self.taker_fee_bps < Decimal::ZERO {
             return Err("taker_fee_bps must be non-negative".into());
@@ -141,8 +151,8 @@ mod tests {
             symbol: "BTC-USD".into(),
             binance_symbol: "btcusdt".into(),
             binance_market: "perp".into(),
-            order_size: Decimal::new(1, 3),     // 0.001
-            max_position: Decimal::new(3, 3),   // 0.003
+            order_size: Decimal::new(1, 3),   // 0.001
+            max_position: Decimal::new(3, 3), // 0.003
             entry_threshold_bps: Decimal::from(15),
             exit_threshold_bps: Decimal::from(3),
             stop_loss_bps: Decimal::from(40),
@@ -189,6 +199,20 @@ mod tests {
     fn max_position_below_order_size_rejected() {
         let mut c = base();
         c.max_position = c.order_size - Decimal::new(1, 6);
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn zero_stale_secs_rejected() {
+        let mut c = base();
+        c.reference_stale_secs = 0;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn zero_slippage_bps_rejected() {
+        let mut c = base();
+        c.market_slippage_bps = Decimal::ZERO;
         assert!(c.validate().is_err());
     }
 }

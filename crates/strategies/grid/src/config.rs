@@ -110,7 +110,10 @@ impl GridConfig {
     /// propagates silently. In release builds, a misconfigured grid
     /// produces a well-defined (but useless) spacing of zero.
     pub fn spacing(&self) -> Decimal {
-        debug_assert!(self.num_levels >= 2, "grid config: num_levels must be ≥ 2 (validate() first)");
+        debug_assert!(
+            self.num_levels >= 2,
+            "grid config: num_levels must be ≥ 2 (validate() first)"
+        );
         if self.num_levels < 2 {
             return Decimal::ZERO;
         }

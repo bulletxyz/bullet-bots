@@ -6,12 +6,12 @@
 //! time and runs until the `ManagedWebsocket` returns a terminal `Disconnected`.
 //!
 //! Canonical source split — important for correctness:
-//!   - `OrderUpdateData::TradeFill` emits BOTH a `Trade` (for inventory) and
-//!     an `OrderLifecycle` (for reconcile). They are independent events so
-//!     strategies that only handle `Trade` won't miss position updates, and
-//!     strategies that only handle `OrderLifecycle` won't miss a transition.
-//!   - `OrderUpdateData::PlaceOrder` / `Cancel` emit only `OrderLifecycle` —
-//!     they carry no execution, so there's no `Trade` to emit.
+//!   - `OrderUpdateData::TradeFill` emits BOTH a `Trade` (for inventory) and an `OrderLifecycle`
+//!     (for reconcile). They are independent events so strategies that only handle `Trade` won't
+//!     miss position updates, and strategies that only handle `OrderLifecycle` won't miss a
+//!     transition.
+//!   - `OrderUpdateData::PlaceOrder` / `Cancel` emit only `OrderLifecycle` — they carry no
+//!     execution, so there's no `Trade` to emit.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -92,11 +92,7 @@ pub async fn connect(
     let client = Arc::new(client);
 
     // Set up WS + subscriptions.
-    let ws = client
-        .connect_ws_managed()
-        .call()
-        .await
-        .map_err(|e| BotError::exchange(e, true))?;
+    let ws = client.connect_ws_managed().call().await.map_err(|e| BotError::exchange(e, true))?;
     ws.subscribe(
         [
             Topic::depth(symbol, OrderbookDepth::D20),
@@ -108,8 +104,7 @@ pub async fn connect(
     .map_err(|e| BotError::exchange(e, false))?;
     // Bullet user-order stream: address-prefixed raw topic (no listenKey flow).
     let user_topic = format!("{address}@user.orders");
-    ws.subscribe_raw([user_topic.clone()], None)
-        .map_err(|e| BotError::exchange(e, false))?;
+    ws.subscribe_raw([user_topic.clone()], None).map_err(|e| BotError::exchange(e, false))?;
 
     tracing::info!(
         symbol,
@@ -134,14 +129,7 @@ pub async fn connect(
 
     // Muxer task — reads WS, classifies, forwards. Holds `ws` so the connection
     // stays alive for the lifetime of the task.
-    tokio::spawn(muxer_loop(
-        ws,
-        trade_tx,
-        book_tx,
-        life_tx,
-        mark_tx,
-        Arc::clone(&health),
-    ));
+    tokio::spawn(muxer_loop(ws, trade_tx, book_tx, life_tx, mark_tx, Arc::clone(&health)));
 
     let broker = BulletBroker::new(Arc::clone(&client), increments, health);
     let feeds = BulletFeeds {

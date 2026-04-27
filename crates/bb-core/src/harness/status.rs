@@ -53,14 +53,10 @@ pub(super) fn spawn_server(
     listener: tokio::net::TcpListener,
     state: Arc<StatusState>,
 ) -> JoinHandle<Result<(), std::io::Error>> {
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/status", get(status))
-        .with_state(state);
+    let app =
+        Router::new().route("/health", get(health)).route("/status", get(status)).with_state(state);
     tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        axum::serve(listener, app).await.map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(())
     })
 }

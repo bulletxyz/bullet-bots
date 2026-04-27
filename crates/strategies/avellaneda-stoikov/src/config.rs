@@ -7,14 +7,13 @@ use serde::Deserialize;
 /// Configuration for the Avellaneda-Stoikov market-making strategy.
 ///
 /// Parameter intuition:
-/// - `gamma` — risk aversion. Higher = more aggressive inventory skew
-///   (reservation price moves further from mid as inventory grows).
-/// - `kappa` — order-flow intensity. Higher = more competitive book, tighter
-///   optimal spread. Hummingbot calibrates this from recent trade arrivals;
-///   we expose it directly for simplicity.
-/// - `order_horizon_secs` (τ) — the finite horizon in the A-S formula. In
-///   crypto perps there's no natural T; treat this as a tuning knob that
-///   scales the inventory-skew term. 60–300s is a reasonable starting range.
+/// - `gamma` — risk aversion. Higher = more aggressive inventory skew (reservation price moves
+///   further from mid as inventory grows).
+/// - `kappa` — order-flow intensity. Higher = more competitive book, tighter optimal spread.
+///   Hummingbot calibrates this from recent trade arrivals; we expose it directly for simplicity.
+/// - `order_horizon_secs` (τ) — the finite horizon in the A-S formula. In crypto perps there's no
+///   natural T; treat this as a tuning knob that scales the inventory-skew term. 60–300s is a
+///   reasonable starting range.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AvellanedaStoikovConfig {
     /// Broker to trade against — name matches the one passed to

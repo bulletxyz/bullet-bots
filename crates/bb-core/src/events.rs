@@ -2,26 +2,23 @@
 //!
 //! Split guarantees one canonical source per kind of fact:
 //!
-//! - **`Trade`** — an execution. Adapters emit one `Trade` per fill. This is
-//!   the *only* event strategies use to update position/PnL. Double-counting
-//!   bugs are structurally impossible: if a Bullet `OrderUpdateData::TradeFill`
-//!   arrives, the adapter emits a `Trade` (for inventory) and a
-//!   `OrderLifecycle` (for reconcile) as independent events. An HL `UserFills`
-//!   message produces a `Trade`; the parallel `OrderUpdates` message produces
-//!   only lifecycle info, never a duplicate `Trade`.
+//! - **`Trade`** — an execution. Adapters emit one `Trade` per fill. This is the *only* event
+//!   strategies use to update position/PnL. Double-counting bugs are structurally impossible: if a
+//!   Bullet `OrderUpdateData::TradeFill` arrives, the adapter emits a `Trade` (for inventory) and a
+//!   `OrderLifecycle` (for reconcile) as independent events. An HL `UserFills` message produces a
+//!   `Trade`; the parallel `OrderUpdates` message produces only lifecycle info, never a duplicate
+//!   `Trade`.
 //!
-//! - **`OrderLifecycle`** — status transitions (Open → PartiallyFilled →
-//!   Filled / Cancelled / Rejected). Used by strategies for reconcile: "is
-//!   this order still resting?", "did my cancel go through?". Never used for
-//!   position updates.
+//! - **`OrderLifecycle`** — status transitions (Open → PartiallyFilled → Filled / Cancelled /
+//!   Rejected). Used by strategies for reconcile: "is this order still resting?", "did my cancel go
+//!   through?". Never used for position updates.
 //!
-//! - **`BookUpdate`** — orderbook state. Strategies read the latest for
-//!   pricing decisions.
+//! - **`BookUpdate`** — orderbook state. Strategies read the latest for pricing decisions.
 //!
 //! - **`MarkPriceUpdate`** — mark price + funding rate from the venue.
 //!
-//! - **`Tick`** — periodic heartbeat. Produced by a framework-provided
-//!   `TickFeed` so periodic work fits the same event model as everything else.
+//! - **`Tick`** — periodic heartbeat. Produced by a framework-provided `TickFeed` so periodic work
+//!   fits the same event model as everything else.
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -98,10 +95,8 @@ pub struct Tick {
 impl Tick {
     pub fn now() -> Self {
         let at = Instant::now();
-        let unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let unix_ms =
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         Self { at, unix_ms }
     }
 }

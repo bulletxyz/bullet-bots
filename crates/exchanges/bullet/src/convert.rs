@@ -159,7 +159,10 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
         "SELL" => Side::Sell,
         "" => Side::Buy, // Cancel events — no side in SDK response
         other => {
-            tracing::warn!(side = other, "Bullet: unknown side in OrderLifecycle — defaulting to Buy");
+            tracing::warn!(
+                side = other,
+                "Bullet: unknown side in OrderLifecycle — defaulting to Buy"
+            );
             Side::Buy
         }
     };

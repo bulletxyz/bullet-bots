@@ -9,6 +9,8 @@ use hyperliquid_rust_sdk::{
 };
 use rust_decimal::Decimal;
 
+use crate::broker::{ClientIdMap, original_client_id};
+
 const EXCHANGE: &str = "hyperliquid";
 
 /// HL uses bare coin names ("BTC"); we use "BTC-USD".
@@ -89,7 +91,7 @@ pub fn l2_book_to_event(data: &L2BookData) -> BookUpdate {
     }
 }
 
-pub fn fill_to_trade(fill: &TradeInfo) -> Option<Trade> {
+pub fn fill_to_trade(fill: &TradeInfo, client_ids: &ClientIdMap) -> Option<Trade> {
     let side = match fill.side.as_str() {
         "B" | "Buy" | "buy" => Side::Buy,
         "A" | "Sell" | "sell" => Side::Sell,
@@ -105,7 +107,7 @@ pub fn fill_to_trade(fill: &TradeInfo) -> Option<Trade> {
         symbol: to_bb_symbol(&fill.coin),
         order_id: fill.oid.to_string(),
         trade_id: Some(fill.tid.to_string()),
-        client_id: fill.cloid.as_ref().map(|c| c.to_string()),
+        client_id: fill.cloid.as_ref().map(|c| original_client_id(client_ids, c)),
         side,
         price,
         quantity,
@@ -113,7 +115,7 @@ pub fn fill_to_trade(fill: &TradeInfo) -> Option<Trade> {
     })
 }
 
-pub fn order_update_to_lifecycle(update: &OrderUpdate) -> OrderLifecycle {
+pub fn order_update_to_lifecycle(update: &OrderUpdate, client_ids: &ClientIdMap) -> OrderLifecycle {
     let order = &update.order;
     let side = match order.side.as_str() {
         "B" | "Buy" | "buy" => Side::Buy,
@@ -153,7 +155,7 @@ pub fn order_update_to_lifecycle(update: &OrderUpdate) -> OrderLifecycle {
         exchange: EXCHANGE.into(),
         order: Order {
             id: order.oid.to_string(),
-            client_id: order.cloid.clone(),
+            client_id: order.cloid.as_ref().map(|c| original_client_id(client_ids, c)),
             symbol: to_bb_symbol(&order.coin),
             side,
             order_type: OrderType::Limit,

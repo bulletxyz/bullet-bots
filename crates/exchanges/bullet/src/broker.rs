@@ -155,11 +155,8 @@ impl Broker for BulletBroker {
             .iter()
             .filter(|p| !p.position_amt.is_zero())
             .map(|p| {
-                let side = if p.position_amt > Decimal::ZERO {
-                    Some(Side::Buy)
-                } else {
-                    Some(Side::Sell)
-                };
+                let side =
+                    if p.position_amt > Decimal::ZERO { Some(Side::Buy) } else { Some(Side::Sell) };
                 Position {
                     symbol: p.symbol.clone(),
                     side,
@@ -172,11 +169,8 @@ impl Broker for BulletBroker {
     }
 
     async fn get_open_orders(&self, symbol: &str) -> Result<Vec<Order>, BotError> {
-        let resp = self
-            .client
-            .my_open_orders(symbol)
-            .await
-            .map_err(|e| BotError::exchange(e, true))?;
+        let resp =
+            self.client.my_open_orders(symbol).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(resp
             .iter()
             .map(|o| {
@@ -293,51 +287,92 @@ impl Broker for BulletBroker {
         }
     }
 
-    async fn cancel_orders(
-        &self,
-        cancels: &[CancelOrder],
-    ) -> Result<Vec<CancelResult>, BotError> {
+    async fn cancel_orders(&self, cancels: &[CancelOrder]) -> Result<Vec<CancelResult>, BotError> {
         if cancels.is_empty() {
             return Ok(vec![]);
         }
         let market_id = self.market_id(&cancels[0].symbol)?;
 
-        let sdk_cancels: Vec<CancelOrderArgs> = cancels
-            .iter()
-            .filter_map(|c| {
-                let order_id = c.order_id.parse::<u64>().ok().map(OrderId);
-                let client_order_id = c
-                    .client_id
-                    .as_deref()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .map(ClientOrderId);
-                // Bullet API requires exactly one identifier — prefer order_id.
-                match (order_id, client_order_id) {
-                    (Some(oid), _) => Some(CancelOrderArgs { order_id: Some(oid), client_order_id: None }),
-                    (None, Some(cid)) => Some(CancelOrderArgs { order_id: None, client_order_id: Some(cid) }),
-                    (None, None) => None,
+        let mut results: Vec<Option<CancelResult>> = vec![None; cancels.len()];
+        let mut sdk_cancels: Vec<CancelOrderArgs> = Vec::new();
+        let mut sent_indices: Vec<usize> = Vec::new();
+        for (i, c) in cancels.iter().enumerate() {
+            let order_id = c.order_id.parse::<u64>().ok().map(OrderId);
+            let client_order_id =
+                c.client_id.as_deref().and_then(|s| s.parse::<u64>().ok()).map(ClientOrderId);
+            let cancel = match (order_id, client_order_id) {
+                (Some(oid), _) => CancelOrderArgs { order_id: Some(oid), client_order_id: None },
+                (None, Some(cid)) => CancelOrderArgs { order_id: None, client_order_id: Some(cid) },
+                (None, None) => {
+                    results[i] = Some(CancelResult {
+                        order_id: c.order_id.clone(),
+                        success: false,
+                        error: Some(
+                            "cancel not sent: Bullet requires numeric order_id or client_id"
+                                .to_string(),
+                        ),
+                    });
+                    continue;
                 }
-            })
-            .collect();
+            };
+            sent_indices.push(i);
+            sdk_cancels.push(cancel);
+        }
+
+        if sdk_cancels.is_empty() {
+            return Ok(results
+                .into_iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    r.unwrap_or(CancelResult {
+                        order_id: cancels[i].order_id.clone(),
+                        success: false,
+                        error: Some("cancel not sent".to_string()),
+                    })
+                })
+                .collect());
+        }
 
         match self.client.cancel_orders(market_id, sdk_cancels, None).await {
-            Ok(_) => Ok(cancels
-                .iter()
-                .map(|c| CancelResult {
-                    order_id: c.order_id.clone(),
-                    success: true,
-                    error: None,
-                })
-                .collect()),
+            Ok(_) => {
+                for i in sent_indices {
+                    results[i] = Some(CancelResult {
+                        order_id: cancels[i].order_id.clone(),
+                        success: true,
+                        error: None,
+                    });
+                }
+                Ok(results
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        r.unwrap_or(CancelResult {
+                            order_id: cancels[i].order_id.clone(),
+                            success: false,
+                            error: Some("cancel not sent".to_string()),
+                        })
+                    })
+                    .collect())
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "cancel tx errored — outcome unknown until WS confirms");
                 let err_str = e.to_string();
-                Ok(cancels
-                    .iter()
-                    .map(|c| CancelResult {
-                        order_id: c.order_id.clone(),
+                for i in sent_indices {
+                    results[i] = Some(CancelResult {
+                        order_id: cancels[i].order_id.clone(),
                         success: false,
                         error: Some(err_str.clone()),
+                    });
+                }
+                Ok(results
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        r.unwrap_or(CancelResult {
+                            order_id: cancels[i].order_id.clone(),
+                            success: false,
+                            error: Some("cancel not sent".to_string()),
+                        })
                     })
                     .collect())
             }
@@ -355,79 +390,85 @@ impl Broker for BulletBroker {
             .get(symbol)
             .ok_or_else(|| BotError::config(format!("No tick/step cached for {symbol}")))?;
 
-        let sdk_amends: Vec<AmendOrderArgs> = amends
-            .iter()
-            .filter_map(|a| {
-                let order_id = a.cancel.order_id.parse::<u64>().ok().map(OrderId);
-                let client_order_id = a
-                    .cancel
-                    .client_id
-                    .as_deref()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .map(ClientOrderId);
-                let cancel = match (order_id, client_order_id) {
-                    (Some(oid), _) => CancelOrderArgs { order_id: Some(oid), client_order_id: None },
-                    (None, Some(cid)) => CancelOrderArgs { order_id: None, client_order_id: Some(cid) },
-                    (None, None) => return None,
-                };
-                let o = &a.new_order;
-                let price_strategy = match o.side {
-                    Side::Buy => RoundingStrategy::ToZero,
-                    Side::Sell => RoundingStrategy::AwayFromZero,
-                };
-                let price = Self::snap(o.price, incr.tick_size, price_strategy);
-                let qty = Self::snap(o.quantity, incr.step_size, RoundingStrategy::ToZero);
-                let price = PositiveDecimal::try_from(price).ok()?;
-                let size = PositiveDecimal::try_from(qty).ok()?;
-                let side = match o.side {
-                    Side::Buy => BulletSide::Bid,
-                    Side::Sell => BulletSide::Ask,
-                };
-                let order_type = match o.order_type {
-                    OrderType::Limit => BulletOrderType::Limit,
-                    OrderType::PostOnly => BulletOrderType::PostOnly,
-                    OrderType::Market => BulletOrderType::ImmediateOrCancel,
-                };
-                let new_client_order_id = o
-                    .client_id
-                    .as_deref()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .map(ClientOrderId);
-                Some(AmendOrderArgs {
-                    cancel,
-                    place: NewOrderArgs {
-                        price,
-                        size,
-                        side,
-                        order_type,
-                        reduce_only: o.reduce_only,
-                        client_order_id: new_client_order_id,
-                        pending_tpsl_pair: None,
-                    },
+        let mut results: Vec<Option<OrderResult>> = vec![None; amends.len()];
+        let mut sdk_amends: Vec<AmendOrderArgs> = Vec::new();
+        let mut sent_indices: Vec<usize> = Vec::new();
+        for (i, amend) in amends.iter().enumerate() {
+            match build_amend_args(amend, incr) {
+                Ok(args) => {
+                    sent_indices.push(i);
+                    sdk_amends.push(args);
+                }
+                Err(error) => {
+                    results[i] = Some(OrderResult {
+                        order_id: None,
+                        client_id: amend.new_order.client_id.clone(),
+                        success: false,
+                        error: Some(error),
+                    });
+                }
+            }
+        }
+
+        if sdk_amends.is_empty() {
+            return Ok(results
+                .into_iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    r.unwrap_or(OrderResult {
+                        order_id: None,
+                        client_id: amends[i].new_order.client_id.clone(),
+                        success: false,
+                        error: Some("amend not sent".to_string()),
+                    })
                 })
-            })
-            .collect();
+                .collect());
+        }
 
         match self.client.amend_orders(market_id, sdk_amends, None).await {
-            Ok(_) => Ok(amends
-                .iter()
-                .map(|a| OrderResult {
-                    order_id: None,
-                    client_id: a.new_order.client_id.clone(),
-                    success: true,
-                    error: None,
-                })
-                .collect()),
+            Ok(_) => {
+                for i in sent_indices {
+                    results[i] = Some(OrderResult {
+                        order_id: None,
+                        client_id: amends[i].new_order.client_id.clone(),
+                        success: true,
+                        error: None,
+                    });
+                }
+                Ok(results
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        r.unwrap_or(OrderResult {
+                            order_id: None,
+                            client_id: amends[i].new_order.client_id.clone(),
+                            success: false,
+                            error: Some("amend not sent".to_string()),
+                        })
+                    })
+                    .collect())
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "amend tx errored — outcome unknown until WS confirms");
                 let err_str = e.to_string();
-                Ok(amends
-                    .iter()
-                    .map(|a| OrderResult {
+                for i in sent_indices {
+                    results[i] = Some(OrderResult {
                         order_id: None,
-                        client_id: a.new_order.client_id.clone(),
+                        client_id: amends[i].new_order.client_id.clone(),
                         success: false,
                         error: Some(err_str.clone()),
+                    });
+                }
+                Ok(results
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        r.unwrap_or(OrderResult {
+                            order_id: None,
+                            client_id: amends[i].new_order.client_id.clone(),
+                            success: false,
+                            error: Some("amend not sent".to_string()),
+                        })
                     })
                     .collect())
             }
@@ -441,5 +482,102 @@ impl Broker for BulletBroker {
             .await
             .map_err(|e| BotError::exchange(e, false))?;
         Ok(())
+    }
+}
+
+fn build_amend_args(amend: &AmendOrder, incr: Increments) -> Result<AmendOrderArgs, String> {
+    let order_id = amend.cancel.order_id.parse::<u64>().ok().map(OrderId);
+    let client_order_id =
+        amend.cancel.client_id.as_deref().and_then(|s| s.parse::<u64>().ok()).map(ClientOrderId);
+    let cancel = match (order_id, client_order_id) {
+        (Some(oid), _) => CancelOrderArgs { order_id: Some(oid), client_order_id: None },
+        (None, Some(cid)) => CancelOrderArgs { order_id: None, client_order_id: Some(cid) },
+        (None, None) => {
+            return Err("amend not sent: Bullet requires numeric order_id or client_id".to_string());
+        }
+    };
+
+    let o = &amend.new_order;
+    let price_strategy = match o.side {
+        Side::Buy => RoundingStrategy::ToZero,
+        Side::Sell => RoundingStrategy::AwayFromZero,
+    };
+    let price = BulletBroker::snap(o.price, incr.tick_size, price_strategy);
+    let qty = BulletBroker::snap(o.quantity, incr.step_size, RoundingStrategy::ToZero);
+    let price = PositiveDecimal::try_from(price).map_err(|e| format!("Invalid price: {e}"))?;
+    let size = PositiveDecimal::try_from(qty).map_err(|e| format!("Invalid quantity: {e}"))?;
+    let side = match o.side {
+        Side::Buy => BulletSide::Bid,
+        Side::Sell => BulletSide::Ask,
+    };
+    let order_type = match o.order_type {
+        OrderType::Limit => BulletOrderType::Limit,
+        OrderType::PostOnly => BulletOrderType::PostOnly,
+        OrderType::Market => BulletOrderType::ImmediateOrCancel,
+    };
+    let new_client_order_id = o
+        .client_id
+        .as_deref()
+        .map(|s| {
+            s.parse::<u64>()
+                .map(ClientOrderId)
+                .map_err(|e| format!("client_id '{s}' must be a u64 for Bullet: {e}"))
+        })
+        .transpose()?;
+    Ok(AmendOrderArgs {
+        cancel,
+        place: NewOrderArgs {
+            price,
+            size,
+            side,
+            order_type,
+            reduce_only: o.reduce_only,
+            client_order_id: new_client_order_id,
+            pending_tpsl_pair: None,
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn increments() -> Increments {
+        Increments { tick_size: Decimal::new(1, 2), step_size: Decimal::new(1, 3) }
+    }
+
+    fn amend(
+        cancel_order_id: &str,
+        cancel_client_id: Option<&str>,
+        new_client_id: Option<&str>,
+    ) -> AmendOrder {
+        AmendOrder {
+            cancel: CancelOrder {
+                symbol: "BTC-USD".into(),
+                order_id: cancel_order_id.into(),
+                client_id: cancel_client_id.map(str::to_string),
+            },
+            new_order: NewOrder {
+                symbol: "BTC-USD".into(),
+                side: Side::Buy,
+                order_type: OrderType::PostOnly,
+                price: Decimal::from(100),
+                quantity: Decimal::new(1, 3),
+                client_id: new_client_id.map(str::to_string),
+                reduce_only: false,
+            },
+        }
+    }
+
+    #[test]
+    fn build_amend_rejects_missing_cancel_identifier() {
+        let err = build_amend_args(&amend("", None, Some("1")), increments()).unwrap_err();
+        assert!(err.contains("numeric order_id or client_id"));
+    }
+
+    #[test]
+    fn build_amend_rejects_non_numeric_new_client_id() {
+        let err = build_amend_args(&amend("123", None, Some("abc")), increments()).unwrap_err();
+        assert!(err.contains("must be a u64"));
     }
 }

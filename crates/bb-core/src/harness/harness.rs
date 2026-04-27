@@ -1,20 +1,19 @@
 //! `Harness::run()` — the event loop that owns feeds + actors.
 //!
 //! Responsibilities:
-//!   1. Instantiate the bus and spawn actor handler tasks so subscribers exist
-//!      before feeds start publishing.
+//!   1. Instantiate the bus and spawn actor handler tasks so subscribers exist before feeds start
+//!      publishing.
 //!   2. Call each actor's `init`.
 //!   3. Spawn feed tasks.
-//!   4. Wait for one of: Ctrl-C, a feed task failing, an actor requesting
-//!      shutdown (via `ActorContext::request_shutdown`), or all feeds
-//!      finishing cleanly (→ `InputsClosed`).
-//!   5. Cancel subscription tasks, let them drain, call `wind_down` on every
-//!      actor with the reason.
+//!   4. Wait for one of: Ctrl-C, a feed task failing, an actor requesting shutdown (via
+//!      `ActorContext::request_shutdown`), or all feeds finishing cleanly (→ `InputsClosed`).
+//!   5. Cancel subscription tasks, let them drain, call `wind_down` on every actor with the reason.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
+use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
@@ -61,6 +60,7 @@ impl Harness {
     /// Run until shutdown.
     pub async fn run(self) -> Result<WindDownReason, BotError> {
         let shutdown = CancellationToken::new();
+        let (actor_failure_tx, mut actor_failure_rx) = mpsc::unbounded_channel();
 
         // 1. Spawn actor subscription tasks up front so broadcasts have subscribers.
         let mut actor_handles: Vec<ActorHandle> = Vec::with_capacity(self.actors.len());
@@ -71,6 +71,7 @@ impl Harness {
                 Arc::clone(&self.brokers),
                 Arc::clone(&self.clock),
                 shutdown.clone(),
+                actor_failure_tx.clone(),
             );
             tracing::info!(actor = %name, "actor subscribed");
             actor_handles.push(handle);
@@ -78,16 +79,13 @@ impl Harness {
 
         // Status API: bind eagerly so a port-in-use error surfaces before init.
         if let Some(addr) = self.status_bind {
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .map_err(|e| crate::error::BotError::config(format!("status server bind {addr}: {e}")))?;
+            let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+                crate::error::BotError::config(format!("status server bind {addr}: {e}"))
+            })?;
             tracing::info!(%addr, "Status API listening");
             let state = Arc::new(StatusState {
                 start_time: Instant::now(),
-                actors: actor_handles
-                    .iter()
-                    .map(|h| (h.name.clone(), h.status.clone()))
-                    .collect(),
+                actors: actor_handles.iter().map(|h| (h.name.clone(), h.status.clone())).collect(),
             });
             // Detached — the server lives as a background task and is torn
             // down when the tokio runtime exits.
@@ -109,8 +107,8 @@ impl Harness {
             }
         }
 
-        // 3. Spawn feeds. Each wrapper task carries its own name so join_next
-        //    can identify the completed feed without an external index.
+        // 3. Spawn feeds. Each wrapper task carries its own name so join_next can identify the
+        //    completed feed without an external index.
         let mut feed_set: JoinSet<(Arc<str>, Result<(), BotError>)> = JoinSet::new();
         for feed in self.feeds {
             let name: Arc<str> = Arc::from(feed.name().to_string());
@@ -142,6 +140,10 @@ impl Harness {
             }
             tokio::select! {
                 biased;
+                Some(reason) = actor_failure_rx.recv() => {
+                    tracing::error!(?reason, "actor failure reported");
+                    break reason;
+                }
                 _ = shutdown.cancelled() => {
                     tracing::info!("shutdown requested by actor");
                     break WindDownReason::Signal;

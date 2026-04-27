@@ -207,12 +207,14 @@ crates/
   bb-core/
     src/
       harness/        Harness + traits: Event, EventFeed, Actor, EventHandler;
-                      status.rs (HTTP API), testing.rs (ScriptedFeed + NullBroker)
+                      status.rs (HTTP API), testing.rs (ScriptedFeed, MockBroker,
+                      MarketDataReplayFeed)
       helpers/        InventoryTracker, ClientIdIssuer, TickFeed
       broker.rs       Broker trait + BrokerRegistry (REST side)
       events.rs       Canonical event types
       types.rs        Shared value types (Order, OrderBook, Side, ...)
       error.rs        BotError
+      clock.rs        Clock trait (SystemClock + TestClock for deterministic tests)
   bb-bot/             CLI binary
   exchanges/
     bullet/           Bullet DEX adapter
@@ -223,14 +225,23 @@ crates/
     hyperliquid/      Hyperliquid adapter — same shape as Bullet; subscribes
                       to ActiveAssetCtx so `MarkPriceUpdate.funding_rate` is
                       real (not hardcoded zero)
+    binance/          Binance reference-price feed (read-only, no broker)
   strategies/
     grid/                Static grid — fixed-range, anchor-biased
     avellaneda-stoikov/  A-S market maker — actor
     funding-arb/         Cross-venue funding arb — actor
+    reference-arb/       Reference-price arb vs Binance perp microprice
 config/
   grid-example.toml
   avellaneda-stoikov-example.toml
   funding-arb-example.toml
+  reference-arb-example.toml
+docs/
+  ARCHITECTURE.md              Component diagram + event flow
+  CONTRIBUTING-EXCHANGES.md   How to add a new adapter
+  strategies/
+    grid-design-notes.md
+    grid-future-work.md
 ```
 
 ## Adding a Strategy
@@ -262,7 +273,7 @@ the full walkthrough including reconnect patterns and the `Trade` /
 
 ## Exchange-Specific Notes
 
-**Bullet**: `bullet-rust-sdk` (local path dep). Ed25519 keys.
+**Bullet**: `bullet-rust-sdk` from the public Bullet GitHub repo. Ed25519 keys.
 `ManagedWebsocket` provides internal reconnection — the harness only sees
 `Disconnected` on terminal give-up. Symbol format: `"BTC-USD"`.
 
@@ -310,10 +321,20 @@ slow handler never blocks the endpoint.
 
 `bb-core::harness::testing` provides:
 
-- `ScriptedFeed<E>` — emits a preset list of events on a configurable delay,
-  then exits. Wire it into a `HarnessBuilder` like any other feed.
-- `NullBroker` — no-op broker that records the sequence of calls (placed
-  orders, cancels) for assertion in tests.
+- `ScriptedFeed<E>` — emits a preset list of events, yielding between each so
+  subscription tasks have a chance to process before the next event arrives.
+  Then exits, causing the harness to shut down cleanly.
+- `MarketDataReplayFeed<E>` — like `ScriptedFeed` but each event carries a
+  `unix_ms` timestamp; the feed advances a `TestClock` before each send so
+  strategies calling `cx.clock().unix_ms()` see deterministic event-driven time.
+- `MockBroker` — records all broker calls and returns pre-queued responses.
+  Inspect calls via `history()`, `placed_count()`, `last_placed_orders()`;
+  queue responses via `queue_place_response(Ok(()))` / `queue_place_response(Err(e))`.
+  `NullBroker` is kept as a type alias for backward compatibility.
 
-See `crates/strategies/grid/src/strategy.rs` (`integration_tests` module) for
-a worked example.
+`TestClock` (in `bb-core::clock`) pairs with `MarketDataReplayFeed` and can
+be injected via `HarnessBuilder::with_clock(Arc::new(clock))`.
+
+See `crates/strategies/grid/src/strategy.rs` (`integration_tests` module) and
+`crates/strategies/reference-arb/src/strategy.rs` (`tests` module) for worked
+examples that drive the full state machine using `ScriptedFeed` + `MockBroker`.
