@@ -2,7 +2,7 @@
 //! a fixed interval so periodic strategy work (rebalance checks, logging,
 //! staleness detection) flows through the same event model as everything else.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::{MissedTickBehavior, interval};
@@ -42,7 +42,7 @@ impl EventFeed<Tick> for TickFeed {
                 _ = ticker.tick() => {
                     // If nothing is subscribed yet we don't care — ticks are
                     // cheap and strategies may subscribe on a later cycle.
-                    let _ = tx.send(Tick { at: Instant::now() });
+                    let _ = tx.send(Tick::now());
                 }
             }
         }

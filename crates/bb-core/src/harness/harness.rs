@@ -23,6 +23,7 @@ use super::builder::{ActorSpawn, BoxInit, BoxStatus, BoxWindDown, FeedSpawn};
 use super::bus::EventBus;
 use super::status::{StatusState, spawn_server};
 use crate::broker::BrokerRegistry;
+use crate::clock::Clock;
 use crate::error::BotError;
 
 pub(super) struct ActorHandle {
@@ -38,6 +39,7 @@ pub struct Harness {
     feeds: Vec<Box<dyn FeedSpawn>>,
     actors: Vec<Box<dyn ActorSpawn>>,
     brokers: Arc<BrokerRegistry>,
+    clock: Arc<dyn Clock>,
     enable_signal: bool,
     status_bind: Option<SocketAddr>,
     bus: EventBus,
@@ -49,10 +51,11 @@ impl Harness {
         actors: Vec<Box<dyn ActorSpawn>>,
         brokers: Arc<BrokerRegistry>,
         bus: EventBus,
+        clock: Arc<dyn Clock>,
         enable_signal: bool,
         status_bind: Option<SocketAddr>,
     ) -> Self {
-        Self { feeds, actors, brokers, enable_signal, status_bind, bus }
+        Self { feeds, actors, brokers, clock, enable_signal, status_bind, bus }
     }
 
     /// Run until shutdown.
@@ -66,6 +69,7 @@ impl Harness {
             let handle = spec.spawn(
                 &self.bus,
                 Arc::clone(&self.brokers),
+                Arc::clone(&self.clock),
                 shutdown.clone(),
             );
             tracing::info!(actor = %name, "actor subscribed");

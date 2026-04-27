@@ -23,7 +23,7 @@
 //! - **`Tick`** — periodic heartbeat. Produced by a framework-provided
 //!   `TickFeed` so periodic work fits the same event model as everything else.
 
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -83,8 +83,25 @@ pub struct MarkPriceUpdate {
     pub funding_rate: Option<Decimal>,
 }
 
-/// Periodic heartbeat. `at` is monotonic time.
+/// Periodic heartbeat.
+///
+/// `at` is the monotonic instant the tick was generated. `unix_ms` is the
+/// corresponding Unix timestamp in milliseconds — useful for replay pacing
+/// and for actors that need wall-clock time without importing
+/// `SystemTime::now()`.
 #[derive(Debug, Clone)]
 pub struct Tick {
     pub at: Instant,
+    pub unix_ms: u64,
+}
+
+impl Tick {
+    pub fn now() -> Self {
+        let at = Instant::now();
+        let unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Self { at, unix_ms }
+    }
 }

@@ -24,6 +24,7 @@
 //! See [`harness`] for a detailed walkthrough of all four concepts.
 
 pub mod broker;
+pub mod clock;
 pub mod config;
 pub mod error;
 pub mod events;
@@ -33,6 +34,7 @@ pub mod types;
 
 /// Convenience re-exports for the most commonly used framework types.
 pub mod prelude {
+    pub use crate::clock::{Clock, SystemClock, TestClock};
     pub use crate::error::BotError;
     pub use crate::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Tick, Trade};
     pub use crate::harness::{ActorSpec, HarnessBuilder};

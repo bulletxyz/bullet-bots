@@ -22,6 +22,7 @@ use super::event::Event;
 use super::feed::{EventFeed, EventTx, FeedContext};
 use super::harness::{ActorHandle, Harness};
 use crate::broker::{Broker, BrokerRegistry};
+use crate::clock::{Clock, SystemClock};
 use crate::error::BotError;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -70,6 +71,7 @@ pub(super) trait ActorSpawn: Send {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
+        clock: Arc<dyn Clock>,
         shutdown: CancellationToken,
     ) -> ActorHandle;
 }
@@ -219,9 +221,10 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
+        clock: Arc<dyn Clock>,
         shutdown: CancellationToken,
     ) -> ActorHandle {
-        let ctx = Arc::new(ActorContext::new(self.name.clone(), brokers, shutdown));
+        let ctx = Arc::new(ActorContext::with_clock(self.name.clone(), brokers, clock, shutdown));
         let name = self.name.clone();
         let actor = self.actor;
 
@@ -283,7 +286,6 @@ pub(super) type BoxWindDown =
 pub(super) type BoxStatus = Arc<dyn Fn() -> serde_json::Value + Send + Sync>;
 
 /// Builder for a [`Harness`].
-#[derive(Default)]
 pub struct HarnessBuilder {
     feeds: Vec<Box<dyn FeedSpawn>>,
     actors: Vec<Box<dyn ActorSpawn>>,
@@ -291,6 +293,21 @@ pub struct HarnessBuilder {
     enable_signal: bool,
     status_bind: Option<SocketAddr>,
     event_capacities: HashMap<TypeId, usize>,
+    clock: Arc<dyn Clock>,
+}
+
+impl Default for HarnessBuilder {
+    fn default() -> Self {
+        Self {
+            feeds: Vec::new(),
+            actors: Vec::new(),
+            brokers: Vec::new(),
+            enable_signal: false,
+            status_bind: None,
+            event_capacities: HashMap::new(),
+            clock: Arc::new(SystemClock),
+        }
+    }
 }
 
 impl HarnessBuilder {
@@ -319,6 +336,17 @@ impl HarnessBuilder {
     #[must_use]
     pub fn with_status_bind(mut self, addr: SocketAddr) -> Self {
         self.status_bind = Some(addr);
+        self
+    }
+
+    /// Override the clock used by all actors' [`ActorContext`]. Defaults to
+    /// [`SystemClock`]. Inject a [`TestClock`] to write deterministic tests
+    /// where time can be advanced programmatically instead of sleeping.
+    ///
+    /// [`TestClock`]: crate::clock::TestClock
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -384,6 +412,7 @@ impl HarnessBuilder {
             self.actors,
             Arc::new(registry),
             bus,
+            self.clock,
             self.enable_signal,
             self.status_bind,
         ))
