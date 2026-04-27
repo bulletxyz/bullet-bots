@@ -67,8 +67,8 @@ pub fn book_ticker_to_event(bt: &BookTickerMessage) -> BookUpdate {
 /// A bad mark price would silently corrupt PnL accounting downstream.
 pub fn mark_price_to_event(mp: &MarkPriceMessage) -> Option<MarkPriceUpdate> {
     let mark_price = parse_decimal_or_warn(&mp.mark_price, "mark_price")?;
-    let funding_rate =
-        parse_decimal_or_warn(&mp.funding_rate, "funding_rate").unwrap_or(Decimal::ZERO);
+    // funding_rate: None means parse failed / field absent — not the same as zero funding
+    let funding_rate = parse_decimal_or_warn(&mp.funding_rate, "funding_rate");
     Some(MarkPriceUpdate {
         exchange: EXCHANGE.into(),
         symbol: mp.symbol.clone(),
@@ -95,10 +95,12 @@ pub fn order_update_to_trade(msg: &OrderUpdateMessage) -> Option<Trade> {
         exchange: EXCHANGE.into(),
         symbol: data.common.symbol.clone(),
         order_id: data.common.order_id.to_string(),
+        trade_id: None, // Bullet SDK does not expose a per-fill trade ID
         client_id: data.common.client_order_id.as_ref().map(|c| c.to_string()),
         side,
         price,
         quantity,
+        timestamp: None, // Bullet SDK does not expose a per-fill timestamp
     })
 }
 

@@ -104,10 +104,12 @@ pub fn fill_to_trade(fill: &TradeInfo) -> Option<Trade> {
         exchange: EXCHANGE.into(),
         symbol: to_bb_symbol(&fill.coin),
         order_id: fill.oid.to_string(),
+        trade_id: Some(fill.tid.to_string()),
         client_id: fill.cloid.as_ref().map(|c| c.to_string()),
         side,
         price,
         quantity,
+        timestamp: Some(fill.time),
     })
 }
 
@@ -167,9 +169,9 @@ pub fn active_asset_ctx_to_mark(data: &ActiveAssetCtxData) -> Option<MarkPriceUp
     let (mark, funding) = match &data.ctx {
         AssetCtx::Perps(p) => (
             parse_decimal_or_warn(&p.shared.mark_px, "mark_px")?,
-            parse_decimal_or_warn(&p.funding, "funding").unwrap_or(Decimal::ZERO),
+            parse_decimal_or_warn(&p.funding, "funding"), // None = parse failed, not zero funding
         ),
-        AssetCtx::Spot(s) => (parse_decimal_or_warn(&s.shared.mark_px, "mark_px")?, Decimal::ZERO),
+        AssetCtx::Spot(s) => (parse_decimal_or_warn(&s.shared.mark_px, "mark_px")?, None),
     };
     Some(MarkPriceUpdate {
         exchange: EXCHANGE.into(),

@@ -42,11 +42,18 @@ pub struct Trade {
     pub exchange: String,
     pub symbol: String,
     pub order_id: String,
+    /// Venue-assigned fill / trade ID. Use this for dedup across reconnects —
+    /// the same physical fill may be replayed when the WS reconnects.
+    /// `None` when the adapter doesn't expose a per-fill ID.
+    pub trade_id: Option<String>,
     /// Set if the order was placed with a caller-assigned client id.
     pub client_id: Option<String>,
     pub side: Side,
     pub price: Decimal,
     pub quantity: Decimal,
+    /// Venue fill timestamp in Unix milliseconds. `None` when the adapter
+    /// doesn't expose a per-fill timestamp.
+    pub timestamp: Option<u64>,
 }
 
 /// Status transition for one of our orders.
@@ -70,7 +77,10 @@ pub struct MarkPriceUpdate {
     pub exchange: String,
     pub symbol: String,
     pub mark_price: Decimal,
-    pub funding_rate: Decimal,
+    /// Funding rate for the current period. `None` means the adapter did not
+    /// receive a funding rate in this update (e.g. AllMids only carries prices).
+    /// `Some(Decimal::ZERO)` means the rate was explicitly reported as zero.
+    pub funding_rate: Option<Decimal>,
 }
 
 /// Periodic heartbeat. `at` is monotonic time.

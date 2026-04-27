@@ -310,10 +310,16 @@ impl EventHandler<MarkPriceUpdate> for FundingArbActor {
         }
         if event.exchange == self.config.exchange_a {
             self.state.mark_a = event.mark_price;
-            self.state.rate_a = event.funding_rate;
+            // Only update rate when the venue reported one — None means the
+            // update carried no funding data (e.g. HL AllMids), not zero rate.
+            if let Some(rate) = event.funding_rate {
+                self.state.rate_a = rate;
+            }
         } else if event.exchange == self.config.exchange_b {
             self.state.mark_b = event.mark_price;
-            self.state.rate_b = event.funding_rate;
+            if let Some(rate) = event.funding_rate {
+                self.state.rate_b = rate;
+            }
         } else {
             return Ok(());
         }

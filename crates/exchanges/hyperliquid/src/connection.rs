@@ -22,7 +22,6 @@ use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
 use ethers::signers::{LocalWallet, Signer};
 use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
-use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 
 use crate::broker::{ConnectionHealth, HyperliquidBroker};
@@ -188,7 +187,7 @@ pub async fn connect(
                                 exchange: "hyperliquid".into(),
                                 symbol: convert::to_bb_symbol(&target_coin),
                                 mark_price,
-                                funding_rate: Decimal::ZERO,
+                                funding_rate: None, // AllMids carries no funding rate
                             });
                         }
                     }

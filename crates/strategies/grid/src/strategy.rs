@@ -553,10 +553,12 @@ mod integration_tests {
             exchange: "bullet".into(),
             symbol: "BTC-USD".into(),
             order_id: "42".into(),
+            trade_id: None,
             client_id: Some("unknown".into()),
             side: Side::Buy,
             price: d("75"),
             quantity: d("1"),
+            timestamp: None,
         }]);
 
         let harness = HarnessBuilder::new()
