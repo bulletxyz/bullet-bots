@@ -1,0 +1,76 @@
+crates/strategies/funding-arb/src/strategy.rs
+  8bbe3dd4c281d9b0 168-176,179-181,185-196,226,238-258,260-261,289-291,364,370,376-378,387-388,628-713
+  da4cf64beecda85a 5-7,108,212-213,234-235,408-409,499-501,546,738-746,749-752,754-758
+crates/strategies/funding-arb/src/config.rs
+  8bbe3dd4c281d9b0 89-162
+crates/strategies/funding-arb/src/state.rs
+  8bbe3dd4c281d9b0 42-47
+  da4cf64beecda85a 6,75
+docs/strategies/funding-arb.md
+  8bbe3dd4c281d9b0 1-118
+docs/strategies/grid.md
+  8bbe3dd4c281d9b0 1-127
+crates/strategies/avellaneda-stoikov/src/strategy.rs
+  3fd75bfce390c251 31,52-61,191-193,195,197-200,208,265,270,284,307,314-324,388-396
+  da4cf64beecda85a 4-9,12-22,32,103,213,327-334,493-496,524,531,541-544,549-550,564-565,569,637-645,777-778
+  8bbe3dd4c281d9b0 222-238
+docs/strategies/avellaneda-stoikov.md
+  8bbe3dd4c281d9b0 1-140
+docs/strategies/reference-arb.md
+  8bbe3dd4c281d9b0 1-119
+crates/strategies/avellaneda-stoikov/src/volatility.rs
+  8bbe3dd4c281d9b0 41-42,54-57,59-62,81-86
+crates/strategies/reference-arb/src/strategy.rs
+  8bbe3dd4c281d9b0 50-53,287,290-296,390-396,399-408,471,477-482,629,637-639,643
+  3fd75bfce390c251 87-90,95,143,820-831,834-924,927-977
+  da4cf64beecda85a 47-49,260,288,548,619,675-677,832-833,925-926
+crates/strategies/grid/src/grid.rs
+  8bbe3dd4c281d9b0 235,420,424
+  da4cf64beecda85a 8-12,117,210-217,219,258-259,322,338,403
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7d8c8dd0dfcde545ca69e93d4da4f9b1d5718670",
+  "prompts": {
+    "3fd75bfce390c251": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30814252-d4f7-48c3-9144-0662ef9c70c2",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 892,
+      "total_deletions": 245,
+      "accepted_lines": 756,
+      "overriden_lines": 0
+    },
+    "8bbe3dd4c281d9b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb5801cf-ee32-4e75-b4d2-1fefc7b61638",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 1046,
+      "total_deletions": 485,
+      "accepted_lines": 1025,
+      "overriden_lines": 0
+    },
+    "da4cf64beecda85a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dcee8-7039-7691-be35-5dbcb18cbaa1",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 1270,
+      "total_deletions": 570,
+      "accepted_lines": 1267,
+      "overriden_lines": 1
+    }
+  }
+}
