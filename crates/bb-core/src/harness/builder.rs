@@ -5,6 +5,8 @@
 //! `run()`. Everything generic lives in these two traits' impls so the user's
 //! wiring code stays typed.
 
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -288,6 +290,7 @@ pub struct HarnessBuilder {
     brokers: Vec<(Arc<str>, Arc<dyn Broker>)>,
     enable_signal: bool,
     status_bind: Option<SocketAddr>,
+    event_capacities: HashMap<TypeId, usize>,
 }
 
 impl HarnessBuilder {
@@ -316,6 +319,20 @@ impl HarnessBuilder {
     #[must_use]
     pub fn with_status_bind(mut self, addr: SocketAddr) -> Self {
         self.status_bind = Some(addr);
+        self
+    }
+
+    /// Override the broadcast channel capacity for a specific event type.
+    ///
+    /// Use this for high-frequency events where the default 1024-message
+    /// buffer is too small. Example: `BookUpdate` on a fast venue may burst
+    /// many ticks per second; set it to 8192 so slow actors don't lag.
+    ///
+    /// Calls after the bus is built have no effect — set capacities before
+    /// any wiring calls.
+    #[must_use]
+    pub fn with_event_capacity<E: Event>(mut self, n: usize) -> Self {
+        self.event_capacities.insert(TypeId::of::<E>(), n);
         self
     }
 
@@ -361,10 +378,12 @@ impl HarnessBuilder {
         for (name, broker) in self.brokers {
             registry.insert(name, broker)?;
         }
+        let bus = EventBus::with_capacities(self.event_capacities);
         Ok(Harness::new(
             self.feeds,
             self.actors,
             Arc::new(registry),
+            bus,
             self.enable_signal,
             self.status_bind,
         ))

@@ -93,6 +93,11 @@ impl std::str::FromStr for BinanceMarket {
     }
 }
 
+/// Bounded channel capacity for the Binance reference price feed. This is a
+/// non-critical stream — dropping newest ticks when the consumer lags is safe
+/// since the next tick supersedes the previous one.
+const REFERENCE_CHANNEL_CAPACITY: usize = 256;
+
 /// Open the bookTicker stream for `symbol` on the chosen Binance market.
 /// `symbol` is passed lowercased into the URL (e.g. `"btcusdt"`). Spawns a
 /// reconnecting background task and returns the feed handle. Connection
@@ -101,16 +106,16 @@ impl std::str::FromStr for BinanceMarket {
 pub fn connect_binance(symbol: &str, market: BinanceMarket) -> MpscFeed<ReferencePriceUpdate> {
     let symbol = symbol.to_lowercase();
     let url = format!("wss://{}/ws/{symbol}@bookTicker", market.host());
-    let (tx, rx) = mpsc::unbounded_channel::<ReferencePriceUpdate>();
+    let (tx, rx) = mpsc::channel::<ReferencePriceUpdate>(REFERENCE_CHANNEL_CAPACITY);
 
     tokio::spawn(async move {
         run_ws_loop(url, tx).await;
     });
 
-    MpscFeed::new(rx)
+    MpscFeed::bounded(rx)
 }
 
-async fn run_ws_loop(url: String, tx: mpsc::UnboundedSender<ReferencePriceUpdate>) {
+async fn run_ws_loop(url: String, tx: mpsc::Sender<ReferencePriceUpdate>) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
 
@@ -129,7 +134,8 @@ async fn run_ws_loop(url: String, tx: mpsc::UnboundedSender<ReferencePriceUpdate
                     match msg {
                         Ok(Message::Text(text)) => match parse_ticker(&text) {
                             Ok(event) => {
-                                if tx.send(event).is_err() {
+                                // drop-newest on overflow: next tick supersedes this one
+                                if tx.try_send(event).is_err() && tx.is_closed() {
                                     tracing::debug!("Binance feed receiver dropped mid-stream");
                                     return;
                                 }

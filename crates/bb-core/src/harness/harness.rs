@@ -48,17 +48,11 @@ impl Harness {
         feeds: Vec<Box<dyn FeedSpawn>>,
         actors: Vec<Box<dyn ActorSpawn>>,
         brokers: Arc<BrokerRegistry>,
+        bus: EventBus,
         enable_signal: bool,
         status_bind: Option<SocketAddr>,
     ) -> Self {
-        Self {
-            feeds,
-            actors,
-            brokers,
-            enable_signal,
-            status_bind,
-            bus: EventBus::new(),
-        }
+        Self { feeds, actors, brokers, enable_signal, status_bind, bus }
     }
 
     /// Run until shutdown.

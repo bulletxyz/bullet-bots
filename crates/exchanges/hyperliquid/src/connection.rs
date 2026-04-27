@@ -29,6 +29,12 @@ use crate::broker::{ConnectionHealth, HyperliquidBroker};
 use crate::config::HyperliquidConfig;
 use crate::convert;
 
+/// BookUpdate / MarkPriceUpdate channels are bounded — the muxer uses
+/// `try_send` and drops-newest on overflow. Trade / OrderLifecycle stay
+/// unbounded: missing fills permanently corrupts position tracking.
+const BOOK_CHANNEL_CAPACITY: usize = 4_096;
+const MARK_CHANNEL_CAPACITY: usize = 256;
+
 /// HL's WS sends data continuously (AllMids ~250ms, ActiveAssetCtx, depth);
 /// a gap longer than this is treated as a transparent reconnect, triggering
 /// a reconcile signal so strategies can resync against REST.
@@ -90,9 +96,9 @@ pub async fn connect(
     tracing::info!(symbol, coin = %coin, address = %format!("{address:?}"), "Hyperliquid: subscribed");
 
     let (trade_tx, trade_rx) = mpsc::unbounded_channel::<Trade>();
-    let (book_tx, book_rx) = mpsc::unbounded_channel::<BookUpdate>();
+    let (book_tx, book_rx) = mpsc::channel::<BookUpdate>(BOOK_CHANNEL_CAPACITY);
     let (life_tx, life_rx) = mpsc::unbounded_channel::<OrderLifecycle>();
-    let (mark_tx, mark_rx) = mpsc::unbounded_channel::<MarkPriceUpdate>();
+    let (mark_tx, mark_rx) = mpsc::channel::<MarkPriceUpdate>(MARK_CHANNEL_CAPACITY);
 
     // Connection health flags shared with broker. The HL SDK reconnects
     // transparently — there's no explicit `Reconnecting` event surfaced to
@@ -147,7 +153,8 @@ pub async fn connect(
             };
             match msg {
                 Message::L2Book(b) if b.data.coin == target_coin => {
-                    let _ = book_tx.send(convert::l2_book_to_event(&b.data));
+                    // drop-newest on overflow: next snapshot is incoming
+                    let _ = book_tx.try_send(convert::l2_book_to_event(&b.data));
                 }
                 Message::OrderUpdates(u) => {
                     for update in u.data.iter().filter(|u| u.order.coin == target_coin) {
@@ -174,17 +181,21 @@ pub async fn connect(
                 }
                 Message::AllMids(m) => {
                     if let Some(mid_str) = m.data.mids.get(&target_coin) {
-                        let _ = mark_tx.send(MarkPriceUpdate {
-                            exchange: "hyperliquid".into(),
-                            symbol: convert::to_bb_symbol(&target_coin),
-                            mark_price: mid_str.parse().unwrap_or(Decimal::ZERO),
-                            funding_rate: Decimal::ZERO,
-                        });
+                        if let Some(mark_price) =
+                            bb_core::helpers::parse_decimal_or_warn(mid_str, "AllMids.mid")
+                        {
+                            let _ = mark_tx.try_send(MarkPriceUpdate {
+                                exchange: "hyperliquid".into(),
+                                symbol: convert::to_bb_symbol(&target_coin),
+                                mark_price,
+                                funding_rate: Decimal::ZERO,
+                            });
+                        }
                     }
                 }
                 Message::ActiveAssetCtx(ctx) if ctx.data.coin == target_coin => {
                     if let Some(event) = convert::active_asset_ctx_to_mark(&ctx.data) {
-                        let _ = mark_tx.send(event);
+                        let _ = mark_tx.try_send(event);
                     }
                 }
                 _ => {}
@@ -196,9 +207,9 @@ pub async fn connect(
     let broker = HyperliquidBroker::new(exchange_client, info, address, health);
     let feeds = HyperliquidFeeds {
         trade: MpscFeed::new(trade_rx),
-        book: MpscFeed::new(book_rx),
+        book: MpscFeed::bounded(book_rx),
         lifecycle: MpscFeed::new(life_rx),
-        mark_price: MpscFeed::new(mark_rx),
+        mark_price: MpscFeed::bounded(mark_rx),
     };
     Ok((broker, feeds))
 }

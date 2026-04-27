@@ -67,19 +67,48 @@ pub trait EventFeed<E: Event>: Send + 'static {
     async fn run(self: Box<Self>, tx: EventTx<E>, cx: FeedContext) -> Result<(), BotError>;
 }
 
-/// Generic feed backed by an unbounded mpsc receiver. Exchange adapters use
-/// this to bridge the muxer task (which writes to a `mpsc::Sender<E>`) and the
-/// harness event bus (which the feed forwards into via `EventTx<E>`).
+enum RxKind<E> {
+    Unbounded(mpsc::UnboundedReceiver<E>),
+    Bounded(mpsc::Receiver<E>),
+}
+
+impl<E> RxKind<E> {
+    async fn recv(&mut self) -> Option<E> {
+        match self {
+            Self::Unbounded(r) => r.recv().await,
+            Self::Bounded(r) => r.recv().await,
+        }
+    }
+}
+
+/// Generic feed bridging an internal mpsc receiver to the harness event bus.
 ///
-/// The muxer task is responsible for its own reconnect logic; this struct just
-/// drains the channel into the bus until cancelled or the sender drops.
+/// Exchange adapters use this to connect their muxer task to the harness:
+/// the muxer writes to the sender side, and `MpscFeed` drains the receiver
+/// into the bus until cancelled or the sender drops.
+///
+/// Supports both unbounded and bounded mpsc channels:
+/// - [`MpscFeed::new`] — unbounded; safe for critical streams (`Trade`,
+///   `OrderLifecycle`) where dropping events is not acceptable.
+/// - [`MpscFeed::bounded`] — bounded; use for `BookUpdate` / `MarkPriceUpdate`
+///   where the muxer uses `try_send` and drops-newest on overflow. The
+///   muxer is responsible for overflow logging.
 pub struct MpscFeed<E: Event> {
-    rx: mpsc::UnboundedReceiver<E>,
+    rx: RxKind<E>,
 }
 
 impl<E: Event> MpscFeed<E> {
+    /// Wrap an unbounded receiver. The muxer's `send()` never blocks or fails
+    /// due to backpressure. Suitable for loss-sensitive streams.
     pub fn new(rx: mpsc::UnboundedReceiver<E>) -> Self {
-        Self { rx }
+        Self { rx: RxKind::Unbounded(rx) }
+    }
+
+    /// Wrap a bounded receiver. The muxer should use `try_send` and handle
+    /// `TrySendError::Full` by logging and discarding — suitable for
+    /// high-frequency events where the newest data supersedes the oldest.
+    pub fn bounded(rx: mpsc::Receiver<E>) -> Self {
+        Self { rx: RxKind::Bounded(rx) }
     }
 }
 

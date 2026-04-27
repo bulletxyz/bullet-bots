@@ -27,6 +27,13 @@ use bullet_rust_sdk::{
 use tokio::sync::mpsc;
 
 use crate::broker::{BulletBroker, ConnectionHealth, load_increments};
+
+/// BookUpdate / MarkPriceUpdate channels are bounded — the muxer uses
+/// `try_send` and drops-newest on overflow, since the next tick supersedes
+/// the previous one. Trade / OrderLifecycle stay unbounded: missing a fill
+/// or state transition permanently corrupts position tracking.
+const BOOK_CHANNEL_CAPACITY: usize = 4_096;
+const MARK_CHANNEL_CAPACITY: usize = 256;
 use crate::config::BulletConfig;
 use crate::convert;
 
@@ -113,10 +120,12 @@ pub async fn connect(
     );
 
     // Typed channels (one per feed).
+    // Trade and OrderLifecycle are unbounded — missing fills corrupts position tracking.
+    // BookUpdate and MarkPriceUpdate are bounded — newest tick supersedes previous.
     let (trade_tx, trade_rx) = mpsc::unbounded_channel::<Trade>();
-    let (book_tx, book_rx) = mpsc::unbounded_channel::<BookUpdate>();
+    let (book_tx, book_rx) = mpsc::channel::<BookUpdate>(BOOK_CHANNEL_CAPACITY);
     let (life_tx, life_rx) = mpsc::unbounded_channel::<OrderLifecycle>();
-    let (mark_tx, mark_rx) = mpsc::unbounded_channel::<MarkPriceUpdate>();
+    let (mark_tx, mark_rx) = mpsc::channel::<MarkPriceUpdate>(MARK_CHANNEL_CAPACITY);
 
     // Connection health flags shared with the broker. Muxer task flips them
     // on WS reconnect / permanent disconnect; strategies poll via the
@@ -137,9 +146,9 @@ pub async fn connect(
     let broker = BulletBroker::new(Arc::clone(&client), increments, health);
     let feeds = BulletFeeds {
         trade: MpscFeed::new(trade_rx),
-        book: MpscFeed::new(book_rx),
+        book: MpscFeed::bounded(book_rx),
         lifecycle: MpscFeed::new(life_rx),
-        mark_price: MpscFeed::new(mark_rx),
+        mark_price: MpscFeed::bounded(mark_rx),
     };
     Ok((broker, feeds))
 }
@@ -147,9 +156,9 @@ pub async fn connect(
 async fn muxer_loop(
     mut ws: ManagedWebsocket,
     trade_tx: mpsc::UnboundedSender<Trade>,
-    book_tx: mpsc::UnboundedSender<BookUpdate>,
+    book_tx: mpsc::Sender<BookUpdate>,
     life_tx: mpsc::UnboundedSender<OrderLifecycle>,
-    mark_tx: mpsc::UnboundedSender<MarkPriceUpdate>,
+    mark_tx: mpsc::Sender<MarkPriceUpdate>,
     health: Arc<ConnectionHealth>,
 ) {
     // Track the highest OrderUpdate event_time we've seen. Bullet stamps each
@@ -166,14 +175,15 @@ async fn muxer_loop(
         match ws_event {
             WsEvent::Message(msg) => match *msg {
                 ServerMessage::DepthUpdate(ref depth) => {
-                    let _ = book_tx.send(convert::depth_to_event(depth));
+                    // drop-newest on overflow: book consumers will get the next snapshot
+                    let _ = book_tx.try_send(convert::depth_to_event(depth));
                 }
                 ServerMessage::BookTicker(ref bt) => {
-                    let _ = book_tx.send(convert::book_ticker_to_event(bt));
+                    let _ = book_tx.try_send(convert::book_ticker_to_event(bt));
                 }
                 ServerMessage::MarkPrice(ref mp) => {
                     if let Some(event) = convert::mark_price_to_event(mp) {
-                        let _ = mark_tx.send(event);
+                        let _ = mark_tx.try_send(event);
                     }
                 }
                 ServerMessage::OrderUpdate(ref update) => {
