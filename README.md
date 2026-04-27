@@ -1,19 +1,8 @@
 # bullet-bots
 
 Open-source event-driven trading bot framework for the [Bullet](https://bullet.xyz)
-perpetual futures DEX and other exchanges.
-
-## What's in the box
-
-- **bb-core** — Harness, event bus, `Actor` / `EventFeed` / `Broker` traits,
-  shared helpers (`InventoryTracker`, `ClientIdIssuer`, `TickFeed`)
-- **bb-exchange-bullet** — Bullet DEX adapter — typed feeds + REST broker
-- **bb-exchange-hyperliquid** — Hyperliquid adapter — typed feeds + REST broker
-- **bb-exchange-binance** — Binance read-only reference price feed (no broker)
-- **bb-strategy-grid** — Static grid bot (fixed price range, anchor-biased)
-- **bb-strategy-avellaneda-stoikov** — A-S market maker (single-venue or fair-value anchored)
-- **bb-strategy-funding-arb** — Cross-venue funding rate arb actor
-- **bb-strategy-reference-arb** — Cross-venue reference-price arb against Binance
+perpetual futures DEX and other exchanges. Ships with adapters for Bullet,
+Hyperliquid, and Binance, plus four ready-to-run strategies.
 
 ## Architecture at a glance
 
