@@ -1,0 +1,25 @@
+crates/bb-core/src/harness/mod.rs
+  3fd75bfce390c251 95
+crates/bb-core/src/harness/testing.rs
+  3fd75bfce390c251 7-12,31,63-104,300-355
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1d94ee93631c865855c92c79731b23900118169e",
+  "prompts": {
+    "3fd75bfce390c251": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30814252-d4f7-48c3-9144-0662ef9c70c2",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 109,
+      "total_deletions": 4,
+      "accepted_lines": 461,
+      "overriden_lines": 0
+    }
+  }
+}
