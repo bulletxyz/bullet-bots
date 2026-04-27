@@ -28,6 +28,9 @@ Key invariant: `Trade` is the only canonical source of position/PnL changes,
 so double-count bugs from adapters that emit both trade and order-update
 events are structurally impossible.
 
+For an annotated component diagram, event-flow walkthrough, adapter layout
+rules, and the broker contract, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Quick start
 
 ```sh
@@ -37,61 +40,61 @@ cargo build
 # Run tests
 cargo nextest run
 
-# Validate a config
+# Validate a config (no keys needed)
 cargo run --bin bb-bot -- validate --config config/grid-example.toml
 
-# Run (set keys via env vars, never in config files)
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+# Run
 cargo run --bin bb-bot -- run --config config/grid-example.toml
 ```
+
+## Key management
+
+Private keys are never read from config files — they are passed via environment
+variables so they stay out of version control. There are two options:
+
+**Option A — key file (recommended).** Generate a keypair once and store it on
+disk at a path only your user can read:
+
+```sh
+cargo run --bin bb-bot -- keygen --network mainnet
+# writes ~/.config/bullet/id.json (mode 0600)
+```
+
+Then point the bot at the file:
+
+```sh
+export BB_BULLET_KEY_FILE="$HOME/.config/bullet/id.json"
+export BB_HYPERLIQUID_KEY_FILE="$HOME/.config/hyperliquid/id.json"
+```
+
+**Option B — hex key via `.env`.** If you need to supply a raw private key,
+store it in a `.env` file (gitignored, not your shell profile) and source it
+before running:
+
+```sh
+# .env  ← add this file to .gitignore
+BB_BULLET_PRIVATE_KEY_HEX=0x...
+BB_HYPERLIQUID_PRIVATE_KEY_HEX=0x...
+```
+
+```sh
+source .env
+cargo run --bin bb-bot -- run --config config/grid-example.toml
+```
+
+Never `export` a raw private key directly in your shell — it ends up in shell
+history and in the environment of every child process.
 
 ## Strategies
 
-### Grid
+| Strategy | Description | Config example |
+|---|---|---|
+| [Grid](crates/strategies/grid/README.md) | Fixed-range level grid with anchor bias and trend filter | `config/grid-example.toml` |
+| [Avellaneda-Stoikov](crates/strategies/avellaneda-stoikov/README.md) | Reservation-price market maker with inventory skew and multi-level ladder | `config/avellaneda-stoikov-example.toml` |
+| [Funding arb](crates/strategies/funding-arb/README.md) | Cross-venue delta-neutral funding rate arb | `config/funding-arb-example.toml` |
+| [Reference arb](crates/strategies/reference-arb/README.md) | Spread arb between Bullet and Binance perpetuals | `config/reference-arb-example.toml` |
 
-Static grid: N uniformly-spaced levels across a fixed `[lower_price,
-upper_price]` range. Initial bias is set by `anchor_price` — levels below
-the anchor start as buys, levels above start as sells. When a buy at level
-`N` fills, the actor re-arms level `N+1` as a sell (and vice versa), so
-every completed round trip harvests `spacing × order_size`. Levels never
-move; price leaving the range = grid idles until it returns.
-
-```sh
-cargo run --bin bb-bot -- run --config config/grid-example.toml
-```
-
-### Avellaneda-Stoikov market maker
-
-Closed-form reservation-price quoting with inventory skew, plus a
-multi-level ladder. Runs as an actor on the harness.
-
-```sh
-cargo run --bin bb-bot -- run --config config/avellaneda-stoikov-example.toml
-```
-
-### Funding rate arbitrage
-
-Monitors funding rates on two venues and opens a delta-neutral position when
-the differential exceeds a threshold. Per-venue inventory tracking, phase
-state machine (Flat / Entering / Active / Exiting), emergency-flatten on
-timeout or delta imbalance. Runs as an actor on the harness.
-
-```sh
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."
-export BB_HYPERLIQUID_PRIVATE_KEY_HEX="0x..."
-cargo run --bin bb-bot -- run --config config/funding-arb-example.toml
-```
-
-### Reference price arbitrage
-
-Monitors Bullet's mid vs. Binance perp's microprice. Enters a position
-when the spread exceeds `entry_threshold_bps` for `persistence_ticks`
-consecutive ticks, and exits on TP, SL, or timeout.
-
-```sh
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."
-cargo run --bin bb-bot -- run --config config/reference-arb-example.toml
-```
+Each README covers what the strategy does, its state machine, key design decisions, config reference, and future work.
 
 ## Writing your own strategy
 
