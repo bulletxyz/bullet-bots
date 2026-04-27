@@ -90,6 +90,7 @@ impl GridState {
     }
 
     /// Enable trend-filter EMAs at construction time.
+    #[must_use]
     pub fn with_trend_filter(mut self, cfg: &TrendFilterConfig) -> Self {
         self.fast_ema = Some(Ema::new(cfg.fast_secs as f64));
         self.slow_ema = Some(Ema::new(cfg.slow_secs as f64));

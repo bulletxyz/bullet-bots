@@ -1,9 +1,9 @@
 //! Shared inventory / realized-PnL tracker. Strategies call `record_fill` from
 //! their `EventHandler<Trade>` impl; the tracker maintains net position,
-//! weighted-average entry price, and realized PnL using the standard
+//! weighted-average entry price, and realized `PnL` using the standard
 //! open-closed split.
 //!
-//! Units: base-asset quantity, quote-asset price, quote-asset realized PnL.
+//! Units: base-asset quantity, quote-asset price, quote-asset realized `PnL`.
 //! Buys increase position; sells decrease. Crossing zero splits a fill into
 //! a closing-portion (realized against prior avg entry) and an opening-portion
 //! (becomes the new avg entry).
@@ -27,7 +27,7 @@ impl InventoryTracker {
         Self::default()
     }
 
-    /// Apply a fill. Returns the realized PnL contribution from this fill
+    /// Apply a fill. Returns the realized `PnL` contribution from this fill
     /// (nonzero only when the fill closes or partially closes an existing
     /// position).
     pub fn record_fill(&mut self, side: Side, price: Decimal, quantity: Decimal) -> Decimal {
@@ -57,9 +57,10 @@ impl InventoryTracker {
 
         // Opposite direction — closing (possibly flipping).
         let close_abs = self.net_position.abs().min(signed_qty.abs());
-        let pnl_per_unit = match self.net_position.is_sign_positive() {
-            true => price - self.avg_entry_price, // closing long: sell high
-            false => self.avg_entry_price - price, // closing short: buy low
+        let pnl_per_unit = if self.net_position.is_sign_positive() {
+            price - self.avg_entry_price // closing long: sell high
+        } else {
+            self.avg_entry_price - price // closing short: buy low
         };
         let realized = pnl_per_unit * close_abs;
         self.realized_pnl += realized;

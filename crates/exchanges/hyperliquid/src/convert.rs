@@ -56,16 +56,16 @@ pub fn user_state_to_positions(resp: &UserStateResponse) -> Vec<Position> {
         .iter()
         .filter_map(|ap| {
             let pos = &ap.position;
-            let size = parse_dec(&pos.szi);
-            if size.is_zero() {
+            let net_sz = parse_dec(&pos.szi);
+            if net_sz.is_zero() {
                 return None;
             }
-            let side = if size > Decimal::ZERO { Some(Side::Buy) } else { Some(Side::Sell) };
+            let side = if net_sz > Decimal::ZERO { Some(Side::Buy) } else { Some(Side::Sell) };
             Some(Position {
                 symbol: to_bb_symbol(&pos.coin),
                 side,
-                size: size.abs(),
-                entry_price: pos.entry_px.as_deref().map(parse_dec).unwrap_or(Decimal::ZERO),
+                size: net_sz.abs(),
+                entry_price: pos.entry_px.as_deref().map_or(Decimal::ZERO, parse_dec),
                 unrealized_pnl: parse_dec(&pos.unrealized_pnl),
             })
         })

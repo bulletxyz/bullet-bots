@@ -9,7 +9,7 @@
 //!   `Trade`; the parallel `OrderUpdates` message produces only lifecycle info, never a duplicate
 //!   `Trade`.
 //!
-//! - **`OrderLifecycle`** — status transitions (Open → PartiallyFilled → Filled / Cancelled /
+//! - **`OrderLifecycle`** — status transitions (Open → `PartiallyFilled` → Filled / Cancelled /
 //!   Rejected). Used by strategies for reconcile: "is this order still resting?", "did my cancel go
 //!   through?". Never used for position updates.
 //!
@@ -75,7 +75,7 @@ pub struct MarkPriceUpdate {
     pub symbol: String,
     pub mark_price: Decimal,
     /// Funding rate for the current period. `None` means the adapter did not
-    /// receive a funding rate in this update (e.g. AllMids only carries prices).
+    /// receive a funding rate in this update (e.g. `AllMids` only carries prices).
     /// `Some(Decimal::ZERO)` means the rate was explicitly reported as zero.
     pub funding_rate: Option<Decimal>,
 }

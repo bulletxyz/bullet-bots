@@ -111,7 +111,7 @@ impl BrokerRegistry {
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(|k| k.as_ref())
+        self.by_name.keys().map(std::ops::Deref::deref)
     }
 }
 

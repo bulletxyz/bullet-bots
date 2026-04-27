@@ -117,7 +117,7 @@ impl<E: Event> EventFeed<E> for MpscFeed<E> {
         loop {
             tokio::select! {
                 biased;
-                _ = cx.cancelled() => return Ok(()),
+                () = cx.cancelled() => return Ok(()),
                 maybe = this.rx.recv() => match maybe {
                     Some(event) => { let _ = tx.send(event); }
                     None => return Ok(()),

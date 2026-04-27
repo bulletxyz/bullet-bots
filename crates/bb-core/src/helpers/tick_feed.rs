@@ -34,7 +34,7 @@ impl EventFeed<Tick> for TickFeed {
         loop {
             tokio::select! {
                 biased;
-                _ = cx.cancelled() => return Ok(()),
+                () = cx.cancelled() => return Ok(()),
                 _ = ticker.tick() => {
                     // If nothing is subscribed yet we don't care — ticks are
                     // cheap and strategies may subscribe on a later cycle.

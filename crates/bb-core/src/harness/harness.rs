@@ -58,6 +58,7 @@ impl Harness {
     }
 
     /// Run until shutdown.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(self) -> Result<WindDownReason, BotError> {
         let shutdown = CancellationToken::new();
         let (actor_failure_tx, mut actor_failure_rx) = mpsc::unbounded_channel();
@@ -144,11 +145,11 @@ impl Harness {
                     tracing::error!(?reason, "actor failure reported");
                     break reason;
                 }
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     tracing::info!("shutdown requested by actor");
                     break WindDownReason::Signal;
                 }
-                _ = &mut signal_fut => {
+                () = &mut signal_fut => {
                     tracing::info!("Ctrl-C received");
                     break WindDownReason::Signal;
                 }

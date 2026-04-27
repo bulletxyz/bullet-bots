@@ -6,11 +6,11 @@
 //!   - `Message::UserFills` → `Trade` (one per execution, authoritative source of position
 //!     changes).
 //!   - `Message::OrderUpdates` → `OrderLifecycle` (status transitions, used for reconcile and
-//!     client_id → oid resolution).
+//!     `client_id` → oid resolution).
 //!   - `Message::L2Book` → `BookUpdate`.
-//!   - `Message::ActiveAssetCtx` → `MarkPriceUpdate` (carries both mark_px and funding — fixes the
-//!     longstanding "funding is always zero" gap).
-//!   - `Message::AllMids` → `MarkPriceUpdate` (fallback with funding_rate=0 until the per-coin
+//!   - `Message::ActiveAssetCtx` → `MarkPriceUpdate` (carries both `mark_px` and funding — fixes
+//!     the longstanding "funding is always zero" gap).
+//!   - `Message::AllMids` → `MarkPriceUpdate` (fallback with `funding_rate`=0 until the per-coin
 //!     `ActiveAssetCtx` arrives).
 
 use std::sync::Arc;
@@ -28,13 +28,13 @@ use crate::broker::{ConnectionHealth, HyperliquidBroker, new_client_id_map};
 use crate::config::HyperliquidConfig;
 use crate::convert;
 
-/// BookUpdate / MarkPriceUpdate channels are bounded — the muxer uses
-/// `try_send` and drops-newest on overflow. Trade / OrderLifecycle stay
+/// `BookUpdate` / `MarkPriceUpdate` channels are bounded — the muxer uses
+/// `try_send` and drops-newest on overflow. `Trade` / `OrderLifecycle` stay
 /// unbounded: missing fills permanently corrupts position tracking.
 const BOOK_CHANNEL_CAPACITY: usize = 4_096;
 const MARK_CHANNEL_CAPACITY: usize = 256;
 
-/// HL's WS sends data continuously (AllMids ~250ms, ActiveAssetCtx, depth);
+/// HL's WS sends data continuously (`AllMids` ~250ms, `ActiveAssetCtx`, depth);
 /// a gap longer than this is treated as a transparent reconnect, triggering
 /// a reconcile signal so strategies can resync against REST.
 const HL_WS_QUIET_THRESHOLD: Duration = Duration::from_secs(10);
@@ -48,6 +48,7 @@ pub struct HyperliquidFeeds {
 
 /// Connect to Hyperliquid and return the REST broker plus typed feeds for
 /// the harness to wire up. `symbol` is in bb format (e.g. `"BTC-USD"`).
+#[allow(clippy::too_many_lines)]
 pub async fn connect(
     config: &HyperliquidConfig,
     symbol: &str,
@@ -179,17 +180,16 @@ pub async fn connect(
                     }
                 }
                 Message::AllMids(m) => {
-                    if let Some(mid_str) = m.data.mids.get(&target_coin) {
-                        if let Some(mark_price) =
+                    if let Some(mid_str) = m.data.mids.get(&target_coin)
+                        && let Some(mark_price) =
                             bb_core::helpers::parse_decimal_or_warn(mid_str, "AllMids.mid")
-                        {
-                            let _ = mark_tx.try_send(MarkPriceUpdate {
-                                exchange: "hyperliquid".into(),
-                                symbol: convert::to_bb_symbol(&target_coin),
-                                mark_price,
-                                funding_rate: None, // AllMids carries no funding rate
-                            });
-                        }
+                    {
+                        let _ = mark_tx.try_send(MarkPriceUpdate {
+                            exchange: "hyperliquid".into(),
+                            symbol: convert::to_bb_symbol(&target_coin),
+                            mark_price,
+                            funding_rate: None, // AllMids carries no funding rate
+                        });
                     }
                 }
                 Message::ActiveAssetCtx(ctx) if ctx.data.coin == target_coin => {

@@ -57,7 +57,7 @@ pub struct ReferenceArbConfig {
     #[serde(default = "default_min_edge_multiple")]
     pub min_edge_multiple: Decimal,
 
-    /// Max IoC slippage in bps. Bullet's "market" order is actually an
+    /// Max `IoC` slippage in bps. Bullet's "market" order is actually an
     /// Immediate-Or-Cancel limit — it needs a bounded worst-case price.
     /// We compute `price = best_opposite × (1 ± slippage)` and let the
     /// venue fill at a better price or cancel the residual. Default 50 bps
@@ -69,7 +69,7 @@ pub struct ReferenceArbConfig {
     /// Dry-run: never place real orders. Fills are simulated at the current
     /// best bid (sell) or best ask (buy) on Bullet's book, inventory is
     /// updated accordingly, and the strategy still runs its full state
-    /// machine. Use to measure signal quality / paper PnL on live data
+    /// machine. Use to measure signal quality / paper `PnL` on live data
     /// without capital at risk.
     #[serde(default)]
     pub dry_run: bool,

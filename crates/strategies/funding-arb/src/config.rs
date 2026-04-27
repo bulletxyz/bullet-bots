@@ -5,7 +5,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderMode {
-    /// Aggressive IoC at best opposing + configured slippage.
+    /// Aggressive `IoC` at best opposing + configured slippage.
     Aggressive,
     /// Passive post-only at the near touch. Only makes sense for thin flow;
     /// trades off fill certainty for maker rebates.
@@ -18,7 +18,7 @@ pub struct FundingArbConfig {
     /// Trading symbol (e.g. "BTC-USD").
     pub symbol: String,
 
-    /// Name of exchange A (the "long funding" side when rate_a > rate_b).
+    /// Name of exchange A (the "long funding" side when `rate_a` > `rate_b`).
     pub exchange_a: String,
 
     /// Name of exchange B.
@@ -43,7 +43,7 @@ pub struct FundingArbConfig {
     #[serde(default = "default_max_rate")]
     pub max_funding_rate: Decimal,
 
-    /// Order mode: TOML `"aggressive"` (default, IoC) or `"passive"` (PostOnly).
+    /// Order mode: TOML `"aggressive"` (default, `IoC`) or `"passive"` (`PostOnly`).
     #[serde(default = "default_order_mode")]
     pub order_mode: OrderMode,
 

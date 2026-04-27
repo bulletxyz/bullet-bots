@@ -20,7 +20,7 @@
 //! let elapsed_ms = cx.clock().unix_ms() - self.entry_time_ms;
 //! ```
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Abstracted time source. Implement this trait to control time in tests.
@@ -84,25 +84,25 @@ impl TestClock {
 
     /// Advance logical time by `duration`. Both `now()` and `unix_ms()` advance.
     pub fn advance(&self, duration: Duration) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.unix_ms += duration.as_millis() as u64;
         inner.offset += duration;
     }
 
     /// Jump to a specific Unix timestamp (ms).
     pub fn set_unix_ms(&self, ms: u64) {
-        self.inner.lock().unwrap().unix_ms = ms;
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner).unix_ms = ms;
     }
 }
 
 impl Clock for TestClock {
     fn now(&self) -> Instant {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.start + inner.offset
     }
 
     fn unix_ms(&self) -> u64 {
-        self.inner.lock().unwrap().unix_ms
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner).unix_ms
     }
 }
 

@@ -29,7 +29,7 @@
 //!   subscribes to. The harness guards each actor with a mutex so handler calls never overlap.
 //!
 //! - **Harness** — the coordinator. Builds the bus, spawns feed tasks, spawns one task per actor
-//!   subscription, routes published events to subscribers, and drives the init → event → wind_down
+//!   subscription, routes published events to subscribers, and drives the init → event → `wind_down`
 //!   lifecycle with a clean shutdown model ([`WindDownReason`]).
 //!
 //! # Canonical-source invariant

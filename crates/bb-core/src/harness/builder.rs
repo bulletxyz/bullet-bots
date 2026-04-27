@@ -155,7 +155,7 @@ impl<A: Actor> SubscriptionFactory<A> {
                     loop {
                         tokio::select! {
                             biased;
-                            _ = cancel.cancelled() => break,
+                            () = cancel.cancelled() => break,
                             recv = rx.recv() => match recv {
                                 Ok(event) => {
                                     let mut guard = actor.lock().await;
@@ -202,13 +202,12 @@ impl<A: Actor> SubscriptionFactory<A> {
                                         });
                                         ctx.request_shutdown();
                                         break;
-                                    } else {
-                                        tracing::warn!(
-                                            actor = ctx.actor_name(),
-                                            lagged = n,
-                                            "actor lagged on event stream"
-                                        );
                                     }
+                                    tracing::warn!(
+                                        actor = ctx.actor_name(),
+                                        lagged = n,
+                                        "actor lagged on event stream"
+                                    );
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                             }
@@ -336,7 +335,7 @@ impl HarnessBuilder {
     /// Enable the HTTP status API on the given port, bound to `127.0.0.1`.
     /// `None` disables it. Use [`with_status_bind`] to bind to a different
     /// address (e.g. `0.0.0.0` for remote access, with appropriate firewall
-    /// rules — the endpoint exposes positions and PnL).
+    /// rules — the endpoint exposes positions and `PnL`).
     #[must_use]
     pub fn with_status_port(mut self, port: Option<u16>) -> Self {
         self.status_bind = port.map(|p| SocketAddr::from(([127, 0, 0, 1], p)));

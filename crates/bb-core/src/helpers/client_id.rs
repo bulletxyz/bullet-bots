@@ -15,7 +15,7 @@ impl ClientIdIssuer {
 
     /// Start the sequence past a known high-water mark. The next `issue()`
     /// returns `start.max(1)`. Useful for crash recovery: on restart,
-    /// resume past the last client_id the venue might still have live so
+    /// resume past the last `client_id` the venue might still have live so
     /// fresh orders don't collide with stale ones.
     pub fn starting_at(start: u64) -> Self {
         Self { next: start.max(1) }

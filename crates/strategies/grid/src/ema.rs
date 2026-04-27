@@ -41,6 +41,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::float_cmp)]
     #[test]
     fn seed_and_converge() {
         let t0 = Instant::now();

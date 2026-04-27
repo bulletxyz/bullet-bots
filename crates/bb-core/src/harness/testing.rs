@@ -251,9 +251,8 @@ impl Broker for MockBroker {
             ..Default::default()
         })
         .await;
-        match self.place_queue.lock().await.pop_front() {
-            Some(Err(e)) => return Err(e),
-            _ => {}
+        if let Some(Err(e)) = self.place_queue.lock().await.pop_front() {
+            return Err(e);
         }
         Ok(orders
             .iter()
@@ -273,9 +272,8 @@ impl Broker for MockBroker {
             ..Default::default()
         })
         .await;
-        match self.cancel_queue.lock().await.pop_front() {
-            Some(Err(e)) => return Err(e),
-            _ => {}
+        if let Some(Err(e)) = self.cancel_queue.lock().await.pop_front() {
+            return Err(e);
         }
         Ok(cancels
             .iter()
@@ -290,9 +288,8 @@ impl Broker for MockBroker {
             ..Default::default()
         })
         .await;
-        match self.cancel_all_queue.lock().await.pop_front() {
-            Some(Err(e)) => return Err(e),
-            _ => {}
+        if let Some(Err(e)) = self.cancel_all_queue.lock().await.pop_front() {
+            return Err(e);
         }
         Ok(())
     }

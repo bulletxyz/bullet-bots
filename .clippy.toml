@@ -1,0 +1,4 @@
+# Allow unwrap/expect/panic in test code without needing per-file #[allow].
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

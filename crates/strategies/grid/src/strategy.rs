@@ -2,9 +2,9 @@
 //!
 //! Subscribed events:
 //!   - `BookUpdate` — cache mid / book for the initial anchor + trend filter.
-//!   - `Trade` — canonical source of inventory / PnL. On fill, marks the level dormant and re-arms
+//!   - `Trade` — canonical source of inventory / `PnL`. On fill, marks the level dormant and re-arms
 //!     the adjacent level with the opposite side.
-//!   - `OrderLifecycle` — learn exchange order_ids; mark cancel/reject levels Pending so the tick
+//!   - `OrderLifecycle` — learn exchange `order_ids`; mark cancel/reject levels Pending so the tick
 //!     re-places them.
 //!   - `Tick` — trend-filter evaluation, missing-order reconcile, place-pendings.
 //!
@@ -96,7 +96,8 @@ impl GridActor {
     }
 
     /// Place every `Pending` level, skipping sides at `max_position` or
-    /// levels that would cross the cached book under PostOnly.
+    /// levels that would cross the cached book under `PostOnly`.
+    #[allow(clippy::too_many_lines)]
     async fn place_pending_orders(&mut self, cx: &ActorContext) -> Result<(), BotError> {
         let broker = cx.broker(self.exchange())?;
         let order_type = self.config.order_type;
@@ -163,8 +164,8 @@ impl GridActor {
         if skipped_crossed > 0 {
             tracing::warn!(
                 skipped = skipped_crossed,
-                best_bid = ?self.book.as_ref().and_then(|b| b.best_bid()).map(|l| l.price.to_string()),
-                best_ask = ?self.book.as_ref().and_then(|b| b.best_ask()).map(|l| l.price.to_string()),
+                best_bid = ?self.book.as_ref().and_then(OrderBook::best_bid).map(|l| l.price.to_string()),
+                best_ask = ?self.book.as_ref().and_then(OrderBook::best_ask).map(|l| l.price.to_string()),
                 "Skipping PostOnly levels in cross — range too tight vs current market"
             );
         }
@@ -218,7 +219,7 @@ impl GridActor {
         let live = broker.get_open_orders(self.symbol()).await?;
         let live_oids: std::collections::HashSet<&str> =
             live.iter().map(|o| o.id.as_str()).collect();
-        let live_cids: std::collections::HashSet<&str> =
+        let live_client_ids: std::collections::HashSet<&str> =
             live.iter().filter_map(|o| o.client_id.as_deref()).collect();
 
         let mut missing = 0;
@@ -227,7 +228,7 @@ impl GridActor {
                 continue;
             }
             let is_live = match (&l.client_id, &l.order_id) {
-                (Some(cid), _) if live_cids.contains(cid.as_str()) => true,
+                (Some(cid), _) if live_client_ids.contains(cid.as_str()) => true,
                 (_, Some(oid)) if live_oids.contains(oid.as_str()) => true,
                 _ => false,
             };
@@ -245,7 +246,7 @@ impl GridActor {
         let Some(cfg) = self.config.trend_filter.clone() else {
             return Ok(());
         };
-        let Some(mid) = self.book.as_ref().and_then(|b| b.midpoint()) else {
+        let Some(mid) = self.book.as_ref().and_then(OrderBook::midpoint) else {
             return Ok(());
         };
         let was_paused = self.state.paused;
@@ -470,37 +471,33 @@ impl EventHandler<OrderLifecycle> for GridActor {
             return Ok(());
         }
         // Learn exchange order_id once the venue acks our placement.
-        if let Some(cid) = event.order.client_id.as_deref() {
-            if let Some(level) =
+        if let Some(cid) = event.order.client_id.as_deref()
+            && let Some(level) =
                 self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
-            {
-                if level.order_id.is_none() && !event.order.id.is_empty() {
-                    level.order_id = Some(event.order.id.clone());
-                }
-            }
+            && level.order_id.is_none()
+            && !event.order.id.is_empty()
+        {
+            level.order_id = Some(event.order.id.clone());
         }
         // Cancelled/rejected → flip back to Pending so the tick re-places.
         // Log so an operator can tell a venue-side auto-cancel (e.g. order
         // TTL expiry on some testnets) apart from a bug in our reconcile.
-        if matches!(event.order.status, OrderStatus::Cancelled | OrderStatus::Rejected) {
-            if let Some(cid) = event.order.client_id.as_deref() {
-                if let Some(level) =
-                    self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
-                {
-                    if level.state == LevelState::Active {
-                        tracing::info!(
-                            level = level.index,
-                            price = %level.price,
-                            side = ?level.side,
-                            status = ?event.order.status,
-                            "Lifecycle event flipped Active level back to Pending"
-                        );
-                        level.state = LevelState::Pending;
-                        level.client_id = None;
-                        level.order_id = None;
-                    }
-                }
-            }
+        if matches!(event.order.status, OrderStatus::Cancelled | OrderStatus::Rejected)
+            && let Some(cid) = event.order.client_id.as_deref()
+            && let Some(level) =
+                self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
+            && level.state == LevelState::Active
+        {
+            tracing::info!(
+                level = level.index,
+                price = %level.price,
+                side = ?level.side,
+                status = ?event.order.status,
+                "Lifecycle event flipped Active level back to Pending"
+            );
+            level.state = LevelState::Pending;
+            level.client_id = None;
+            level.order_id = None;
         }
         Ok(())
     }

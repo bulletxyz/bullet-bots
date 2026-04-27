@@ -77,7 +77,7 @@ enum Command {
         #[arg(long)]
         symbol: String,
     },
-    /// Record (ts, bullet_mid, binance_mid, spread_bps) to CSV continuously.
+    /// Record (ts, `bullet_mid`, `binance_mid`, `spread_bps`) to CSV continuously.
     /// No trading. Use for collecting a dataset to analyze offline before
     /// committing to a live strategy run.
     Observe {
@@ -108,7 +108,7 @@ struct AppConfig {
 #[derive(Debug, Deserialize)]
 struct ExchangeEntry {
     /// Kept so serde accepts the `type = "..."` tag in config files; we
-    /// dispatch by the HashMap key (`bullet` / `hyperliquid`) in practice.
+    /// dispatch by the `HashMap` key (`bullet` / `hyperliquid`) in practice.
     #[serde(rename = "type")]
     #[allow(dead_code)]
     exchange_type: String,
@@ -138,22 +138,21 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
     let mut config: AppConfig = toml::from_str(&content)?;
 
-    if let Some(bullet) = config.exchanges.get_mut("bullet") {
-        if let Some(table) = bullet.config.as_table_mut() {
-            if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
-                table.insert("key_file".to_string(), toml::Value::String(path));
-            }
-            if let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
-                table.insert("private_key_hex".to_string(), toml::Value::String(key));
-            }
+    if let Some(bullet) = config.exchanges.get_mut("bullet")
+        && let Some(table) = bullet.config.as_table_mut()
+    {
+        if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
+            table.insert("key_file".to_string(), toml::Value::String(path));
+        }
+        if let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
+            table.insert("private_key_hex".to_string(), toml::Value::String(key));
         }
     }
-    if let Some(hl) = config.exchanges.get_mut("hyperliquid") {
-        if let Ok(key) = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY_HEX") {
-            if let Some(table) = hl.config.as_table_mut() {
-                table.insert("private_key_hex".to_string(), toml::Value::String(key));
-            }
-        }
+    if let Some(hl) = config.exchanges.get_mut("hyperliquid")
+        && let Ok(key) = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY_HEX")
+        && let Some(table) = hl.config.as_table_mut()
+    {
+        table.insert("private_key_hex".to_string(), toml::Value::String(key));
     }
 
     Ok(config)
@@ -366,7 +365,7 @@ async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
 // -- Validate (no connection) -----------------------------------------------
 
-fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn validate(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let stype = config.strategy.strategy_type.as_str();
     match stype {
         "grid" => {
@@ -400,8 +399,8 @@ fn validate(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
 // -- Auxiliary commands (unchanged) -----------------------------------------
 
-fn keygen(network: String, out: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let faucet_host = match network.as_str() {
+fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let faucet_host = match network {
         "mainnet" => return Err("Faucet is only available on testnet".into()),
         _ => "app.testnet.bullet.xyz",
     };
@@ -519,6 +518,7 @@ async fn deposit(
 async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::error::Error>> {
     use bb_core::types::{NewOrder, OrderType, Side};
     use secrecy::SecretString;
+    const FLATTEN_SLIPPAGE_BPS: u64 = 100;
 
     // Reuse the adapter's connect path to get a real Broker. We don't need the
     // feeds — just a broker handle. The env-var flow populates key material.
@@ -566,7 +566,6 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
     .ok_or("Orderbook has no opposing-side liquidity — cannot flatten")?;
     // 1% worst-case price — generous for a manual utility command;
     // the IoC ensures we actually fill at or better than top-of-book.
-    const FLATTEN_SLIPPAGE_BPS: u64 = 100;
     let slip = Decimal::from(FLATTEN_SLIPPAGE_BPS) / Decimal::from(10_000);
     let ioc_price = match close_side {
         Side::Buy => base * (Decimal::ONE + slip),
@@ -636,7 +635,7 @@ impl ObserverActor {
     }
 
     /// Write a row only when either mid has changed since the last write.
-    /// Bullet testnet can emit many BookUpdate events per second with an
+    /// Bullet testnet can emit many `BookUpdate` events per second with an
     /// unchanged top-of-book; recording them all produces GB-scale CSVs
     /// of duplicates.
     fn record(&mut self) -> std::io::Result<()> {
@@ -765,7 +764,7 @@ async fn observe(
         output = %output.display(),
         bullet_symbol = %symbol,
         binance = %binance_symbol,
-        market = %binance_market.to_string(),
+        market = %binance_market,
         "observer starting"
     );
 
@@ -790,13 +789,13 @@ async fn observe(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen { network, out } => keygen(network, out),
+        Command::Keygen { network, out } => keygen(&network, out),
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,
         Command::Flatten { network, symbol } => flatten(network, symbol).await,
         Command::Observe { network, symbol, binance_symbol, binance_market, output } => {
             observe(network, symbol, binance_symbol, binance_market, output).await
         }
-        Command::Validate { config: path } => validate(load_config(&path)?),
+        Command::Validate { config: path } => validate(&load_config(&path)?),
         Command::Run { config: path } => {
             let config = load_config(&path)?;
             let filter = EnvFilter::try_new(&config.logging.level)

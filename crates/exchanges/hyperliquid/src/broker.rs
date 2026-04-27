@@ -49,13 +49,13 @@ pub(crate) fn new_client_id_map() -> ClientIdMap {
 
 pub(crate) fn register_client_id(map: &ClientIdMap, client_id: &str) -> Uuid {
     let cloid = client_id_to_cloid(client_id);
-    let mut guard = map.write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = map.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.insert(cloid.to_string(), client_id.to_string());
     cloid
 }
 
 pub(crate) fn original_client_id(map: &ClientIdMap, cloid: &str) -> String {
-    let guard = map.read().unwrap_or_else(|e| e.into_inner());
+    let guard = map.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.get(cloid).cloned().unwrap_or_else(|| cloid.to_string())
 }
 
@@ -91,7 +91,7 @@ impl HyperliquidBroker {
 
 #[async_trait]
 impl Broker for HyperliquidBroker {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "hyperliquid"
     }
 
@@ -431,13 +431,15 @@ fn parse_amend_result(
             OrderResult { order_id: None, client_id, success: false, error: Some(msg.clone()) }
         }
         ExchangeResponseStatus::Ok(response) => {
-            let statuses = response.data.as_ref().map(|d| d.statuses.as_slice()).unwrap_or(&[]);
+            let statuses = response.data.as_ref().map_or(&[][..], |d| d.statuses.as_slice());
             let (oid, success, error) = match statuses.get(pos) {
                 Some(ExchangeDataStatus::Resting(r)) => (Some(r.oid.to_string()), true, None),
                 Some(ExchangeDataStatus::Filled(f)) => (Some(f.oid.to_string()), true, None),
-                Some(ExchangeDataStatus::Success) => (None, true, None),
-                Some(ExchangeDataStatus::WaitingForFill) => (None, true, None),
-                Some(ExchangeDataStatus::WaitingForTrigger) => (None, true, None),
+                Some(
+                    ExchangeDataStatus::Success
+                    | ExchangeDataStatus::WaitingForFill
+                    | ExchangeDataStatus::WaitingForTrigger,
+                ) => (None, true, None),
                 Some(ExchangeDataStatus::Error(msg)) => (None, false, Some(msg.clone())),
                 None => (None, false, Some("no status returned".to_string())),
             };
@@ -461,7 +463,7 @@ fn parse_bulk_order_response(
             })
             .collect(),
         ExchangeResponseStatus::Ok(response) => {
-            let statuses = response.data.as_ref().map(|d| d.statuses.as_slice()).unwrap_or(&[]);
+            let statuses = response.data.as_ref().map_or(&[][..], |d| d.statuses.as_slice());
             if statuses.len() != orders.len() {
                 tracing::warn!(
                     sent = orders.len(),
@@ -480,9 +482,11 @@ fn parse_bulk_order_response(
                         Some(ExchangeDataStatus::Filled(f)) => {
                             (Some(f.oid.to_string()), true, None)
                         }
-                        Some(ExchangeDataStatus::Success) => (None, true, None),
-                        Some(ExchangeDataStatus::WaitingForFill) => (None, true, None),
-                        Some(ExchangeDataStatus::WaitingForTrigger) => (None, true, None),
+                        Some(
+                            ExchangeDataStatus::Success
+                            | ExchangeDataStatus::WaitingForFill
+                            | ExchangeDataStatus::WaitingForTrigger,
+                        ) => (None, true, None),
                         Some(ExchangeDataStatus::Error(msg)) => (None, false, Some(msg.clone())),
                         None => (None, false, Some("no status returned".to_string())),
                     };

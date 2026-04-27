@@ -139,13 +139,13 @@ impl GridConfig {
         if self.order_size <= Decimal::ZERO {
             return Err("order_size must be > 0".to_string());
         }
-        if let Some(anchor) = self.anchor_price {
-            if anchor < self.lower_price || anchor > self.upper_price {
-                return Err(format!(
-                    "anchor_price ({}) must be within [{}, {}]",
-                    anchor, self.lower_price, self.upper_price
-                ));
-            }
+        if let Some(anchor) = self.anchor_price
+            && (anchor < self.lower_price || anchor > self.upper_price)
+        {
+            return Err(format!(
+                "anchor_price ({}) must be within [{}, {}]",
+                anchor, self.lower_price, self.upper_price
+            ));
         }
         Ok(())
     }

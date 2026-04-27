@@ -62,7 +62,7 @@ impl ArbState {
         self.phase_entered_at = Some(Instant::now());
     }
 
-    /// Signed funding rate spread: rate_a - rate_b. Positive means A pays more.
+    /// Signed funding rate spread: `rate_a` - `rate_b`. Positive means A pays more.
     pub fn rate_spread(&self) -> Decimal {
         self.rate_a - self.rate_b
     }

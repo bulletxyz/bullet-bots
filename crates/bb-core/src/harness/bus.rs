@@ -8,7 +8,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::broadcast;
 
@@ -55,7 +55,7 @@ impl EventBus {
     /// creates the channel at the configured capacity; later calls return
     /// clones of the same sender.
     pub fn sender<E: Event>(&self) -> broadcast::Sender<E> {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let cap = guard.capacities.get(&TypeId::of::<E>()).copied().unwrap_or(DEFAULT_CAPACITY);
         let entry = guard
             .channels

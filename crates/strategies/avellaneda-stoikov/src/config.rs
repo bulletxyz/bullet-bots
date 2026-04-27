@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use bb_core::types::OrderType;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -26,7 +24,7 @@ pub struct AvellanedaStoikovConfig {
 
     /// Optional reference exchange whose mid drives `s` in the A-S formula
     /// instead of the trading venue's own mid. Only `"binance"` is wired up
-    /// today. When unset, the trading venue's BookUpdate drives `s` (textbook
+    /// today. When unset, the trading venue's `BookUpdate` drives `s` (textbook
     /// single-venue A-S). Setting this turns the strategy into a fair-value
     /// MM: quotes are anchored to the reference and the local book is used
     /// only for inventory tracking and would-cross checks.
@@ -203,7 +201,7 @@ fn default_order_level_spread_bps() -> Decimal {
 }
 
 fn default_amend_threshold_bps() -> Decimal {
-    Decimal::from_str("0.5").unwrap()
+    Decimal::new(5, 1)
 }
 
 fn default_min_refresh_interval_ms() -> u64 {

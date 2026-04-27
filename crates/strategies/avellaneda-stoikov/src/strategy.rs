@@ -1,7 +1,7 @@
 //! Avellaneda-Stoikov market maker as an event-driven actor.
 //!
 //! Two modes, selected by config:
-//!   - **Single-venue (default)**: `s` in the A-S formula comes from the trading venue's BookUpdate
+//!   - **Single-venue (default)**: `s` in the A-S formula comes from the trading venue's `BookUpdate`
 //!     mid. Faithful to the paper.
 //!   - **Fair-value MM**: when `reference_exchange` is set, `s` comes from `ReferencePriceUpdate`
 //!     (e.g. Binance). The local book is still used for inventory tracking and would-cross checks
@@ -14,7 +14,7 @@
 //!     without a reference.
 //!   - `ReferencePriceUpdate` — when a reference is configured, this is the canonical source of `s`
 //!     and the volatility estimator's input.
-//!   - `Trade` — canonical source of inventory / realized PnL. Nulls `last_quote_at` so the next
+//!   - `Trade` — canonical source of inventory / realized `PnL`. Nulls `last_quote_at` so the next
 //!     tick re-builds the ladder around the new reservation price.
 //!   - `OrderLifecycle` — purely observational; logged for debugging. Not used for position updates
 //!     (that's the canonical-source invariant).
@@ -70,7 +70,7 @@ pub struct AvellanedaStoikovActor {
     last_quote_at: Option<Instant>,
     /// Set when `reference_exchange` is configured. When `Some`, `last_mid`
     /// and the volatility estimator are driven exclusively by the reference
-    /// feed; local BookUpdate is used only for the local book itself.
+    /// feed; local `BookUpdate` is used only for the local book itself.
     reference_last_seen: Option<Instant>,
     last_reconcile_at: Option<Instant>,
 }
@@ -190,6 +190,7 @@ impl AvellanedaStoikovActor {
 
     /// Diff `intents` against `self.slots` and compute the minimal set of
     /// API operations needed (amend, place, cancel) without executing them.
+    #[allow(clippy::too_many_lines)]
     fn reconcile_orders(
         &mut self,
         intents: &[(Side, usize, Decimal, Decimal)],
@@ -247,40 +248,25 @@ impl AvellanedaStoikovActor {
                 .find(|(i, s)| !matched[*i] && s.side == *side && s.level == *level)
                 .map(|(i, _)| i);
 
-            match existing {
-                Some(idx) => {
-                    matched[idx] = true;
-                    let slot = &self.slots[idx];
-                    if (slot.price - *price).abs() < threshold {
-                        kept_slots.push(slot.clone());
-                        continue;
-                    }
-                    if slot.order_id.is_none() && slot.client_id.is_none() {
-                        kept_slots.push(slot.clone());
-                        continue;
-                    }
-                    let new_cid = self.client_ids.issue();
-                    to_amend.push(AmendOrder {
-                        cancel: CancelOrder {
-                            symbol: symbol.to_string(),
-                            order_id: slot.order_id.clone().unwrap_or_default(),
-                            client_id: slot.client_id.clone(),
-                        },
-                        new_order: NewOrder {
-                            symbol: symbol.to_string(),
-                            side: *side,
-                            order_type,
-                            price: *price,
-                            quantity: *size,
-                            client_id: Some(new_cid.clone()),
-                            reduce_only: false,
-                        },
-                    });
-                    amend_intents.push((idx, *side, *level, *price, *size, new_cid));
+            if let Some(idx) = existing {
+                matched[idx] = true;
+                let slot = &self.slots[idx];
+                if (slot.price - *price).abs() < threshold {
+                    kept_slots.push(slot.clone());
+                    continue;
                 }
-                None => {
-                    let new_cid = self.client_ids.issue();
-                    to_place.push(NewOrder {
+                if slot.order_id.is_none() && slot.client_id.is_none() {
+                    kept_slots.push(slot.clone());
+                    continue;
+                }
+                let new_cid = self.client_ids.issue();
+                to_amend.push(AmendOrder {
+                    cancel: CancelOrder {
+                        symbol: symbol.to_string(),
+                        order_id: slot.order_id.clone().unwrap_or_default(),
+                        client_id: slot.client_id.clone(),
+                    },
+                    new_order: NewOrder {
                         symbol: symbol.to_string(),
                         side: *side,
                         order_type,
@@ -288,9 +274,21 @@ impl AvellanedaStoikovActor {
                         quantity: *size,
                         client_id: Some(new_cid.clone()),
                         reduce_only: false,
-                    });
-                    place_intents.push((*side, *level, *price, *size, new_cid));
-                }
+                    },
+                });
+                amend_intents.push((idx, *side, *level, *price, *size, new_cid));
+            } else {
+                let new_cid = self.client_ids.issue();
+                to_place.push(NewOrder {
+                    symbol: symbol.to_string(),
+                    side: *side,
+                    order_type,
+                    price: *price,
+                    quantity: *size,
+                    client_id: Some(new_cid.clone()),
+                    reduce_only: false,
+                });
+                place_intents.push((*side, *level, *price, *size, new_cid));
             }
         }
 
@@ -329,20 +327,21 @@ impl AvellanedaStoikovActor {
     /// - slots whose target moved are batch-amended atomically,
     /// - missing rungs are placed,
     /// - unmatched slots (e.g. when inventory caps disable a side) are cancelled.
+    ///
     /// The function is cheap when nothing has moved, so it's safe to call
     /// from `BookUpdate` for sub-second responsiveness.
+    #[allow(clippy::too_many_lines)]
     async fn refresh_quotes(&mut self, cx: &ActorContext, mid: Decimal) -> Result<(), BotError> {
         // Throttle: when ref feeds fire faster than Bullet REST can settle,
         // keep the actor draining its input channel by skipping refreshes
         // that arrive within the cooldown window. The next event after the
         // window will pick up the latest mid.
         let min_interval = Duration::from_millis(self.config.min_refresh_interval_ms);
-        if min_interval > Duration::ZERO {
-            if let Some(last) = self.last_quote_at {
-                if Instant::now().duration_since(last) < min_interval {
-                    return Ok(());
-                }
-            }
+        if min_interval > Duration::ZERO
+            && let Some(last) = self.last_quote_at
+            && Instant::now().duration_since(last) < min_interval
+        {
+            return Ok(());
         }
         if self.uses_reference() && self.reference_is_stale(Instant::now()) {
             tracing::warn!(
@@ -522,13 +521,13 @@ impl AvellanedaStoikovActor {
                 Ok(open) => {
                     use std::collections::HashSet;
                     let live_oids: HashSet<&str> = open.iter().map(|o| o.id.as_str()).collect();
-                    let live_cids: HashSet<&str> =
+                    let live_client_ids: HashSet<&str> =
                         open.iter().filter_map(|o| o.client_id.as_deref()).collect();
                     let before = kept_slots.len();
                     kept_slots.retain(|s| match s.order_id.as_deref() {
                         Some(oid) => {
                             live_oids.contains(oid)
-                                || s.client_id.as_deref().is_some_and(|c| live_cids.contains(c))
+                                || s.client_id.as_deref().is_some_and(|c| live_client_ids.contains(c))
                         }
                         None => true,
                     });
@@ -540,15 +539,15 @@ impl AvellanedaStoikovActor {
                     // order.
                     let tracked_oids: HashSet<&str> =
                         kept_slots.iter().filter_map(|s| s.order_id.as_deref()).collect();
-                    let tracked_cids: HashSet<&str> =
+                    let tracked_client_ids: HashSet<&str> =
                         kept_slots.iter().filter_map(|s| s.client_id.as_deref()).collect();
                     let orphans: Vec<CancelOrder> = open
                         .iter()
                         .filter(|o| {
                             let oid_tracked = tracked_oids.contains(o.id.as_str());
-                            let cid_tracked =
-                                o.client_id.as_deref().is_some_and(|c| tracked_cids.contains(c));
-                            !oid_tracked && !cid_tracked
+                            let client_tracked =
+                                o.client_id.as_deref().is_some_and(|c| tracked_client_ids.contains(c));
+                            !oid_tracked && !client_tracked
                         })
                         .map(|o| CancelOrder {
                             symbol: symbol.clone(),
@@ -561,9 +560,9 @@ impl AvellanedaStoikovActor {
                         .iter()
                         .filter(|o| {
                             let oid_tracked = tracked_oids.contains(o.id.as_str());
-                            let cid_tracked =
-                                o.client_id.as_deref().is_some_and(|c| tracked_cids.contains(c));
-                            !oid_tracked && !cid_tracked
+                            let client_tracked =
+                                o.client_id.as_deref().is_some_and(|c| tracked_client_ids.contains(c));
+                            !oid_tracked && !client_tracked
                         })
                         .map(|o| {
                             format!("{}@{}/{}", o.id, o.client_id.as_deref().unwrap_or("-"), o.side)
@@ -709,12 +708,10 @@ impl EventHandler<BookUpdate> for AvellanedaStoikovActor {
         // In single-venue mode the local book is the price source. In
         // fair-value mode the reference feed owns `last_mid` / volatility,
         // so we only retain the book itself for would-cross checks.
-        if !self.uses_reference() {
-            if let Some(m) = event.orderbook.midpoint() {
-                self.last_mid = Some(m);
-                if let Some(f) = m.to_f64() {
-                    self.volatility.push(f, Instant::now());
-                }
+        if !self.uses_reference() && let Some(m) = event.orderbook.midpoint() {
+            self.last_mid = Some(m);
+            if let Some(f) = m.to_f64() {
+                self.volatility.push(f, Instant::now());
             }
         }
         self.book = Some(event.orderbook);
@@ -772,11 +769,11 @@ impl EventHandler<Trade> for AvellanedaStoikovActor {
         // yet received its exchange order_id the moment a fill arrives
         // without a client_id (possible on HL for orders placed without cloid).
         let event_cid = event.client_id.as_deref();
-        let event_oid = Some(event.order_id.as_str()).filter(|s| !s.is_empty());
+        let event_order_id = Some(event.order_id.as_str()).filter(|s| !s.is_empty());
         self.slots.retain(|slot| {
             let cid_match = event_cid.is_some() && slot.client_id.as_deref() == event_cid;
-            let oid_match = event_oid.is_some() && slot.order_id.as_deref() == event_oid;
-            !(cid_match || oid_match)
+            let order_id_match = event_order_id.is_some() && slot.order_id.as_deref() == event_order_id;
+            !(cid_match || order_id_match)
         });
         // Force a re-quote on the next tick so both sides follow the new
         // reservation price.
@@ -814,20 +811,19 @@ impl EventHandler<OrderLifecycle> for AvellanedaStoikovActor {
             OrderStatus::Cancelled | OrderStatus::Rejected | OrderStatus::Filled => {
                 self.slots.retain(|s| {
                     let cid_match = cid.is_some() && s.client_id.as_deref() == cid;
-                    let oid_match = !oid.is_empty() && s.order_id.as_deref() == Some(oid);
-                    !(cid_match || oid_match)
+                    let order_id_match = !oid.is_empty() && s.order_id.as_deref() == Some(oid);
+                    !(cid_match || order_id_match)
                 });
             }
             // Place ack: learn the exchange-assigned order_id.
             OrderStatus::Open | OrderStatus::PartiallyFilled => {
-                if let Some(cid) = cid {
-                    if let Some(slot) =
+                if let Some(cid) = cid
+                    && let Some(slot) =
                         self.slots.iter_mut().find(|s| s.client_id.as_deref() == Some(cid))
-                    {
-                        if slot.order_id.is_none() && !oid.is_empty() {
-                            slot.order_id = Some(oid.to_string());
-                        }
-                    }
+                    && slot.order_id.is_none()
+                    && !oid.is_empty()
+                {
+                    slot.order_id = Some(oid.to_string());
                 }
             }
         }
@@ -841,14 +837,14 @@ impl EventHandler<Tick> for AvellanedaStoikovActor {
         // If the broker has flagged a permanent WS disconnect, the strategy
         // is running blind. Request a clean harness shutdown so wind_down
         // can cancel outstanding orders before the process exits.
-        if let Ok(broker) = cx.broker(self.exchange()) {
-            if broker.is_disconnected() {
-                tracing::error!(
-                    "broker reports permanent disconnect — requesting harness shutdown"
-                );
-                cx.request_shutdown();
-                return Ok(());
-            }
+        if let Ok(broker) = cx.broker(self.exchange())
+            && broker.is_disconnected()
+        {
+            tracing::error!(
+                "broker reports permanent disconnect — requesting harness shutdown"
+            );
+            cx.request_shutdown();
+            return Ok(());
         }
         let Some(mid) = self.last_mid else {
             return Ok(());
@@ -859,7 +855,7 @@ impl EventHandler<Tick> for AvellanedaStoikovActor {
         }
 
         let best_bid = self.slots.iter().filter(|s| s.side == Side::Buy).map(|s| s.price).max();
-        let best_ask = self.slots.iter().filter(|s| s.side == Side::Sell).map(|s| s.price).min();
+        let top_ask = self.slots.iter().filter(|s| s.side == Side::Sell).map(|s| s.price).min();
         tracing::info!(
             net_pos = %self.inventory.net_position,
             pnl = %self.inventory.realized_pnl,
@@ -867,7 +863,7 @@ impl EventHandler<Tick> for AvellanedaStoikovActor {
             slots = self.slots.len(),
             mid = ?self.last_mid.map(|p| p.to_string()),
             best_bid = ?best_bid.map(|p| p.to_string()),
-            best_ask = ?best_ask.map(|p| p.to_string()),
+            best_ask = ?top_ask.map(|p| p.to_string()),
             vol_samples = self.volatility.sample_count(),
             "A-S tick"
         );

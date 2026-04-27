@@ -5,7 +5,6 @@
 //! events are handled separately by the typed feeds.
 
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -90,13 +89,13 @@ pub(crate) async fn load_increments(
                     tick = f
                         .get("tickSize")
                         .and_then(|v| v.as_str())
-                        .and_then(|s| Decimal::from_str(s).ok());
+                        .and_then(|s| s.parse::<Decimal>().ok());
                 }
                 "LOT_SIZE" => {
                     step = f
                         .get("stepSize")
                         .and_then(|v| v.as_str())
-                        .and_then(|s| Decimal::from_str(s).ok());
+                        .and_then(|s| s.parse::<Decimal>().ok());
                 }
                 _ => {}
             }
@@ -110,7 +109,7 @@ pub(crate) async fn load_increments(
 
 #[async_trait]
 impl Broker for BulletBroker {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "bullet"
     }
 
@@ -125,7 +124,7 @@ impl Broker for BulletBroker {
     async fn get_orderbook(&self, symbol: &str, depth: usize) -> Result<OrderBook, BotError> {
         let resp = self
             .client
-            .order_book(Some(depth as i32), symbol)
+            .order_book(Some(i32::try_from(depth).unwrap_or(i32::MAX)), symbol)
             .await
             .map_err(|e| BotError::exchange(e, true))?
             .into_inner();
@@ -216,7 +215,7 @@ impl Broker for BulletBroker {
                 let snapped_qty = Self::snap(o.quantity, incr.step_size, RoundingStrategy::ToZero);
                 let price = PositiveDecimal::try_from(snapped_price)
                     .map_err(|e| BotError::strategy(format!("Invalid price: {e}")))?;
-                let size = PositiveDecimal::try_from(snapped_qty)
+                let qty_pd = PositiveDecimal::try_from(snapped_qty)
                     .map_err(|e| BotError::strategy(format!("Invalid quantity: {e}")))?;
                 let side = match o.side {
                     Side::Buy => BulletSide::Bid,
@@ -241,7 +240,7 @@ impl Broker for BulletBroker {
 
                 Ok(NewOrderArgs {
                     price,
-                    size,
+                    size: qty_pd,
                     side,
                     order_type,
                     reduce_only: o.reduce_only,
@@ -505,7 +504,7 @@ fn build_amend_args(amend: &AmendOrder, incr: Increments) -> Result<AmendOrderAr
     let price = BulletBroker::snap(o.price, incr.tick_size, price_strategy);
     let qty = BulletBroker::snap(o.quantity, incr.step_size, RoundingStrategy::ToZero);
     let price = PositiveDecimal::try_from(price).map_err(|e| format!("Invalid price: {e}"))?;
-    let size = PositiveDecimal::try_from(qty).map_err(|e| format!("Invalid quantity: {e}"))?;
+    let qty_pd = PositiveDecimal::try_from(qty).map_err(|e| format!("Invalid quantity: {e}"))?;
     let side = match o.side {
         Side::Buy => BulletSide::Bid,
         Side::Sell => BulletSide::Ask,
@@ -528,7 +527,7 @@ fn build_amend_args(amend: &AmendOrder, incr: Increments) -> Result<AmendOrderAr
         cancel,
         place: NewOrderArgs {
             price,
-            size,
+            size: qty_pd,
             side,
             order_type,
             reduce_only: o.reduce_only,

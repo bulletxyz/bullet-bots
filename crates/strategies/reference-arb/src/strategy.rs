@@ -104,7 +104,7 @@ impl ReferenceArbActor {
     /// Simulated fill price for a market order against the current book.
     /// Uses the far side (market buys eat the ask, market sells eat the bid).
     /// Falls back to `bullet_mid` if book sides are empty — better than nothing,
-    /// but inflates paper PnL because it ignores the half-spread cost.
+    /// but inflates paper `PnL` because it ignores the half-spread cost.
     fn simulated_fill_price(&self, side: Side) -> Option<Decimal> {
         let book = self.bullet_book.as_ref()?;
         let level = match side {
@@ -114,10 +114,10 @@ impl ReferenceArbActor {
         level.map(|l| l.price).or(self.bullet_mid)
     }
 
-    /// Worst-case IoC limit price for a "market" order on Bullet. Bullet's
-    /// Market type is an IoC limit — it rejects `price = 0`, so we compute
+    /// Worst-case `IoC` limit price for a "market" order on Bullet. Bullet's
+    /// `Market` type is an `IoC` limit — it rejects `price = 0`, so we compute
     /// a bounded aggressive price from the opposite side of the book plus
-    /// `market_slippage_bps`. The IoC semantics ensure we actually fill at
+    /// `market_slippage_bps`. The `IoC` semantics ensure we actually fill at
     /// or better than the true top-of-book, not at this worst-case bound.
     fn aggressive_ioc_price(&self, side: Side) -> Option<Decimal> {
         let mid = self.bullet_mid?;
@@ -233,7 +233,8 @@ impl ReferenceArbActor {
         }
 
         // Inventory cap guard (defense-in-depth — Flat should have pos≈0).
-        let side = desired.expect("ready implies desired is Some");
+        // `ready` is true only when `desired.is_some()`, so None is unreachable here.
+        let Some(side) = desired else { return Ok(()) };
         let projected = self.inventory.net_position.abs() + self.config.order_size;
         if projected > self.config.max_position {
             tracing::warn!(
@@ -820,22 +821,25 @@ mod tests {
 
     // Full-cycle integration test ------------------------------------------
 
-    /// Drives the complete state machine Flat → Entering → Holding → Exiting → Flat
-    /// through a harness with ScriptedFeed + MockBroker.
+    /// Drives the complete state machine `Flat` → `Entering` → `Holding` → `Exiting` → `Flat`
+    /// through a harness with `ScriptedFeed` + `MockBroker`.
     ///
     /// Event layout (6 rounds, one event per feed per round):
     ///
-    ///   Round 1: book sets bullet_mid=100_150; ref sets binance_mid=100_000
-    ///            → spread=+15bps, persistence streak=1 of 1 → ENTRY (Sell cid="1")
-    ///   Round 2: padding; Trade cid="1" (Sell) → Holding
-    ///   Rounds 3-4: padding refs (spread still 15bps, no exit)
-    ///   Round 5: ref sets binance_mid=100_120 → spread≈3bps ≤ exit_threshold(3) → TP EXIT (Buy
-    /// cid="2")   Round 6: Trade cid="2" (Buy) → exit fill → Flat
+    /// - Round 1: book sets `bullet_mid`=`100_150`; ref sets `binance_mid`=`100_000`
+    ///   → spread=+15bps, persistence streak=1 of 1 → ENTRY (Sell `cid`="1")
+    /// - Round 2: padding; Trade `cid`="1" (Sell) → `Holding`
+    /// - Rounds 3-4: padding refs (spread still 15bps, no exit)
+    /// - Round 5: ref sets `binance_mid`=`100_120` → spread≈3bps ≤ `exit_threshold`(3) → TP EXIT
+    ///   (Buy `cid`="2")
+    /// - Round 6: Trade `cid`="2" (Buy) → exit fill → `Flat`
     ///
     /// Spread arithmetic:
-    ///   bullet_mid = (100_140 + 100_160) / 2 = 100_150
-    ///   entry: (100_150 − 100_000) / 100_000 × 10_000 = 15 bps
-    ///   exit:  (100_150 − 100_120) / 100_120 × 10_000 ≈ 2.997 bps ≤ 3 (TP)
+    ///
+    /// - `bullet_mid` = (`100_140` + `100_160`) / 2 = `100_150`
+    /// - entry: (`100_150` − `100_000`) / `100_000` × `10_000` = 15 bps
+    /// - exit:  (`100_150` − `100_120`) / `100_120` × `10_000` ≈ 2.997 bps ≤ 3 (TP)
+    #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "current_thread")]
     async fn full_arb_cycle_flat_entering_holding_exiting_flat() {
         use std::collections::BTreeMap;
@@ -957,8 +961,7 @@ mod tests {
             .history()
             .await
             .into_iter()
-            .filter(|c| c.method == "place_orders")
-            .nth(0)
+            .find(|c| c.method == "place_orders")
             .map(|c| c.orders)
             .unwrap_or_default();
         assert_eq!(entry_orders.len(), 1);

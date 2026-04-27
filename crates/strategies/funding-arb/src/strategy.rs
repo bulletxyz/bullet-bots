@@ -3,13 +3,13 @@
 //! Two-venue delta-neutral strategy. Subscribed events:
 //!   - `MarkPriceUpdate` — cache mark + funding per venue; trigger entry.
 //!   - `Trade` — canonical source of position changes *per venue*. One `InventoryTracker` per venue
-//!     via a `HashMap<exchange, tracker>`. The net_delta across both trackers should tend to zero
+//!     via a `HashMap<exchange, tracker>`. The `net_delta` across both trackers should tend to zero
 //!     while Active.
 //!   - `BookUpdate` — cache best bid/ask for aggressive pricing.
 //!   - `Tick` — phase-timeout checks, delta-imbalance guard, exit condition.
 //!
 //! Key fix vs. pre-harness version: position updates come from `Trade` only,
-//! so the "double-count via Trade + OrderUpdate" bug that used to happen on
+//! so the "double-count via Trade + `OrderUpdate`" bug that used to happen on
 //! HL is structurally impossible. The `order.symbol` vs `exchange` name
 //! confusion is gone too — events are typed and carry explicit `exchange`.
 
@@ -35,7 +35,7 @@ pub struct FundingArbActor {
     /// Monotonic id-issuer seeded by session epoch so a restart doesn't
     /// collide with cloids the previous session left dangling on the venue.
     client_ids: ClientIdIssuer,
-    /// Set of client_ids the strategy has issued. Trade events whose
+    /// Set of `client_ids` the strategy has issued. Trade events whose
     /// `client_id` isn't in this set are ignored — they're external fills
     /// (e.g., from another bot or manual order placement on the same wallet)
     /// and would otherwise corrupt our `InventoryTracker` net positions.
@@ -48,7 +48,7 @@ impl FundingArbActor {
     }
 
     /// Construct with an explicit `ClientIdIssuer`. Use `ClientIdIssuer::new()`
-    /// (starts at 1) in tests to get deterministic client_ids so scripted fills
+    /// (starts at 1) in tests to get deterministic `client_ids` so scripted fills
     /// can carry the expected id without knowing the session epoch.
     pub fn with_client_ids(config: FundingArbConfig, client_ids: ClientIdIssuer) -> Self {
         let mut inventory = HashMap::new();
@@ -64,7 +64,7 @@ impl FundingArbActor {
         }
     }
 
-    /// Issue a fresh client_id and remember it so the Trade handler can
+    /// Issue a fresh `client_id` and remember it so the Trade handler can
     /// distinguish our fills from external ones on the same wallet.
     fn issue_client_id(&mut self) -> String {
         let cid = self.client_ids.issue();
@@ -77,7 +77,7 @@ impl FundingArbActor {
     }
 
     fn net_position(&self, exchange: &str) -> Decimal {
-        self.inventory.get(exchange).map(|i| i.net_position).unwrap_or(Decimal::ZERO)
+        self.inventory.get(exchange).map_or(Decimal::ZERO, |i| i.net_position)
     }
 
     /// Net delta across both legs — should be near zero when Active.
@@ -90,7 +90,7 @@ impl FundingArbActor {
             && self.state.rate_b.abs() < self.config.max_funding_rate
     }
 
-    /// (short_exchange, long_exchange) — short the leg with the higher funding.
+    /// (`short_exchange`, `long_exchange`) — short the leg with the higher funding.
     fn pick_sides(&self) -> (String, String) {
         if self.state.rate_a > self.state.rate_b {
             (self.config.exchange_a.clone(), self.config.exchange_b.clone())
@@ -124,7 +124,7 @@ impl FundingArbActor {
         &mut self,
         exchange: &str,
         side: Side,
-        size: Decimal,
+        qty: Decimal,
         reduce_only: bool,
     ) -> NewOrder {
         NewOrder {
@@ -132,7 +132,7 @@ impl FundingArbActor {
             side,
             order_type: self.order_type(),
             price: self.aggressive_price(exchange, side),
-            quantity: size,
+            quantity: qty,
             client_id: Some(self.issue_client_id()),
             reduce_only,
         }
@@ -176,14 +176,14 @@ impl FundingArbActor {
 
         if let Err(e) = &short_res {
             tracing::error!(exchange = %short_ex, error = %e, "Short leg placement failed");
-        } else if !short_ok {
-            let err = short_res.unwrap().into_iter().next().and_then(|r| r.error).unwrap_or_default();
+        } else if !short_ok && let Ok(results) = short_res {
+            let err = results.into_iter().next().and_then(|r| r.error).unwrap_or_default();
             tracing::error!(exchange = %short_ex, error = %err, "Short leg order rejected");
         }
         if let Err(e) = &long_res {
             tracing::error!(exchange = %long_ex, error = %e, "Long leg placement failed");
-        } else if !long_ok {
-            let err = long_res.unwrap().into_iter().next().and_then(|r| r.error).unwrap_or_default();
+        } else if !long_ok && let Ok(results) = long_res {
+            let err = results.into_iter().next().and_then(|r| r.error).unwrap_or_default();
             tracing::error!(exchange = %long_ex, error = %err, "Long leg order rejected");
         }
 
@@ -312,12 +312,12 @@ impl Actor for FundingArbActor {
         // WindDownReason intentionally ignored: position-or-not is the right
         // discriminant here. If we hold a hedge, emergency_flatten is correct
         // regardless of why we're shutting down.
-        if self.state.phase != ArbPhase::Flat {
-            let _ = self.emergency_flatten(cx, "shutdown").await;
-        } else {
+        if self.state.phase == ArbPhase::Flat {
             for ex in [&self.config.exchange_a, &self.config.exchange_b] {
                 let _ = cx.broker(ex)?.cancel_all_orders(self.symbol()).await;
             }
+        } else {
+            let _ = self.emergency_flatten(cx, "shutdown").await;
         }
         tracing::info!(
             cycles = self.state.cycles_completed,
@@ -379,8 +379,7 @@ impl EventHandler<MarkPriceUpdate> for FundingArbActor {
         let hold_elapsed = self
             .state
             .phase_entered_at
-            .map(|t| t.elapsed().as_secs() >= self.config.min_flat_hold_secs)
-            .unwrap_or(true);
+            .map_or(true, |t| t.elapsed().as_secs() >= self.config.min_flat_hold_secs);
 
         if self.state.phase == ArbPhase::Flat
             && hold_elapsed
@@ -449,25 +448,22 @@ impl EventHandler<Tick> for FundingArbActor {
         // we'd be running blind on stale state. Request shutdown so the
         // harness can wind down (cancel orders, log final stats) cleanly.
         for ex in [&self.config.exchange_a, &self.config.exchange_b] {
-            if let Ok(broker) = cx.broker(ex) {
-                if broker.is_disconnected() {
-                    tracing::error!(
-                        exchange = %ex,
-                        "broker reports permanent disconnect — requesting harness shutdown"
-                    );
-                    cx.request_shutdown();
-                    return Ok(());
-                }
+            if let Ok(broker) = cx.broker(ex)
+                && broker.is_disconnected()
+            {
+                tracing::error!(
+                    exchange = %ex,
+                    "broker reports permanent disconnect — requesting harness shutdown"
+                );
+                cx.request_shutdown();
+                return Ok(());
             }
         }
         // On a transparent reconnect (or message-stream gap) the broker
         // raises a one-shot reconcile signal. Sync our `InventoryTracker`
         // against actual on-venue positions for any leg that flagged.
         for ex in [self.config.exchange_a.clone(), self.config.exchange_b.clone()] {
-            let broker = match cx.broker(&ex) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
+            let Ok(broker) = cx.broker(&ex) else { continue };
             if !broker.take_reconcile_signal() {
                 continue;
             }
@@ -477,12 +473,11 @@ impl EventHandler<Tick> for FundingArbActor {
                     let venue_pos = positions
                         .iter()
                         .find(|p| p.symbol == self.symbol())
-                        .map(|p| match p.side {
+                        .map_or(Decimal::ZERO, |p| match p.side {
                             Some(Side::Buy) => p.size,
                             Some(Side::Sell) => -p.size,
                             None => Decimal::ZERO,
-                        })
-                        .unwrap_or(Decimal::ZERO);
+                        });
                     let our_pos = self.net_position(&ex);
                     if venue_pos != our_pos {
                         tracing::warn!(
@@ -497,7 +492,7 @@ impl EventHandler<Tick> for FundingArbActor {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(exchange = %ex, error = %e, "reconcile get_positions failed")
+                    tracing::warn!(exchange = %ex, error = %e, "reconcile get_positions failed");
                 }
             }
         }
@@ -713,16 +708,16 @@ mod tests {
     // Full `Flat → Entering → Active → Exiting → Flat` cycle driven by
     /// `ScriptedFeed`s and `MockBroker`.
     ///
-    /// Three parallel feeds run in interleaved fashion (current_thread +
-    /// yield_now between events). Fills are placed 3 rounds after the entry
+    /// Three parallel feeds run in interleaved fashion (`current_thread` +
+    /// `yield_now` between events). Fills are placed 3 rounds after the entry
     /// trigger so they're guaranteed to arrive after `enter()` has issued the
-    /// client_ids they carry.
+    /// `client_ids` they carry.
     ///
     /// Round-by-round:
-    ///   0: rate_a set, skip, tick (Flat — mark_b still 0)
-    ///   1: rate_b set → ENTRY (cids "1","2"), skip, tick (Entering 0/2)
-    ///   2: narrow rate_a, skip, tick (Entering 0/2)
-    ///   3: narrow rate_b, fill cid=1 (bullet), tick (Entering 1/2)
+    ///   0: `rate_a` set, skip, tick (Flat — `mark_b` still 0)
+    ///   1: `rate_b` set → ENTRY (cids "1","2"), skip, tick (Entering 0/2)
+    ///   2: narrow `rate_a`, skip, tick (Entering 0/2)
+    ///   3: narrow `rate_b`, fill cid=1 (bullet), tick (Entering 1/2)
     ///   4: padding, fill cid=2 (hl), tick (Entering → Active)
     ///   5: padding, skip, tick (Active → EXIT, cids "3","4" issued)
     ///   6: padding, close cid=3 (bullet), tick (Exiting 1/2)

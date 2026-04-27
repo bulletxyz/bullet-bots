@@ -64,7 +64,7 @@ pub fn book_ticker_to_event(bt: &BookTickerMessage) -> BookUpdate {
 }
 
 /// Returns `None` if `mark_price` fails to parse (skip the update entirely).
-/// A bad mark price would silently corrupt PnL accounting downstream.
+/// A bad mark price would silently corrupt `PnL` accounting downstream.
 pub fn mark_price_to_event(mp: &MarkPriceMessage) -> Option<MarkPriceUpdate> {
     let mark_price = parse_decimal_or_warn(&mp.mark_price, "mark_price")?;
     // funding_rate: None means parse failed / field absent — not the same as zero funding
@@ -78,7 +78,7 @@ pub fn mark_price_to_event(mp: &MarkPriceMessage) -> Option<MarkPriceUpdate> {
 }
 
 /// Extract a `Trade` from `OrderUpdateData::TradeFill`. Returns `None` for
-/// PlaceOrder / Cancel variants (no execution) or unknown sides (logged).
+/// `PlaceOrder` / `Cancel` variants (no execution) or unknown sides (logged).
 pub fn order_update_to_trade(msg: &OrderUpdateMessage) -> Option<Trade> {
     let OrderUpdateData::TradeFill(data) = &msg.order else { return None };
     let side = match data.side.as_str() {
@@ -96,7 +96,7 @@ pub fn order_update_to_trade(msg: &OrderUpdateMessage) -> Option<Trade> {
         symbol: data.common.symbol.clone(),
         order_id: data.common.order_id.to_string(),
         trade_id: None, // Bullet SDK does not expose a per-fill trade ID
-        client_id: data.common.client_order_id.as_ref().map(|c| c.to_string()),
+        client_id: data.common.client_order_id.as_ref().map(ToString::to_string),
         side,
         price,
         quantity,
@@ -118,7 +118,7 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             OrderUpdateData::TradeFill(data) => (
                 data.common.symbol.clone(),
                 data.common.order_id.to_string(),
-                data.common.client_order_id.as_ref().map(|c| c.to_string()),
+                data.common.client_order_id.as_ref().map(ToString::to_string),
                 data.common.status.clone(),
                 data.side.clone(),
                 data.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(Decimal::ZERO),
@@ -128,7 +128,7 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             OrderUpdateData::PlaceOrder(data) => (
                 data.common.symbol.clone(),
                 data.common.order_id.to_string(),
-                data.common.client_order_id.as_ref().map(|c| c.to_string()),
+                data.common.client_order_id.as_ref().map(ToString::to_string),
                 data.common.status.clone(),
                 data.side.clone(),
                 data.price.parse().unwrap_or_default(),
@@ -138,7 +138,7 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             OrderUpdateData::Cancel(data) => (
                 data.common.symbol.clone(),
                 data.common.order_id.to_string(),
-                data.common.client_order_id.as_ref().map(|c| c.to_string()),
+                data.common.client_order_id.as_ref().map(ToString::to_string),
                 data.common.status.clone(),
                 String::new(), // SDK Cancel does not surface the original side
                 Decimal::ZERO,
@@ -147,7 +147,6 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             ),
         };
     let status = match status_str.as_str() {
-        "NEW" => OrderStatus::Open,
         "PARTIALLY_FILLED" => OrderStatus::PartiallyFilled,
         "FILLED" => OrderStatus::Filled,
         "CANCELED" | "CANCELLED" => OrderStatus::Cancelled,
@@ -155,9 +154,8 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
         _ => OrderStatus::Open,
     };
     let side = match side_str.as_str() {
-        "BUY" => Side::Buy,
         "SELL" => Side::Sell,
-        "" => Side::Buy, // Cancel events — no side in SDK response
+        "BUY" | "" => Side::Buy, // "" = Cancel events — no side in SDK response
         other => {
             tracing::warn!(
                 side = other,

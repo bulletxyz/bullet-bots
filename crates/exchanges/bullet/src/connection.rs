@@ -28,9 +28,9 @@ use tokio::sync::mpsc;
 
 use crate::broker::{BulletBroker, ConnectionHealth, load_increments};
 
-/// BookUpdate / MarkPriceUpdate channels are bounded — the muxer uses
+/// `BookUpdate` / `MarkPriceUpdate` channels are bounded — the muxer uses
 /// `try_send` and drops-newest on overflow, since the next tick supersedes
-/// the previous one. Trade / OrderLifecycle stay unbounded: missing a fill
+/// the previous one. `Trade` / `OrderLifecycle` stay unbounded: missing a fill
 /// or state transition permanently corrupts position tracking.
 const BOOK_CHANNEL_CAPACITY: usize = 4_096;
 const MARK_CHANNEL_CAPACITY: usize = 256;
@@ -194,7 +194,7 @@ async fn muxer_loop(
                 // AggTrade intentionally not forwarded — the `OrderUpdate`
                 // TradeFill variant is the authoritative fill source for our
                 // account. Emitting from both would double-count.
-                _ => continue,
+                _ => {}
             },
             WsEvent::Reconnecting => {
                 tracing::warn!("Bullet: WebSocket reconnecting — flagging reconcile");

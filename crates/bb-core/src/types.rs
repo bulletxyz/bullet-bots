@@ -11,6 +11,7 @@ pub enum Side {
 }
 
 impl Side {
+    #[must_use]
     pub fn opposite(self) -> Self {
         match self {
             Side::Buy => Side::Sell,
@@ -92,7 +93,7 @@ impl OrderBook {
         }
     }
 
-    /// Would a PostOnly order at (`side`, `price`) cross the top of book?
+    /// Would a `PostOnly` order at (`side`, `price`) cross the top of book?
     ///
     /// Returns `true` when a venue would reject the order as in-cross —
     /// buys at or above the best ask, sells at or below the best bid. When
