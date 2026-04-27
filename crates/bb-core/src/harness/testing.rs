@@ -4,6 +4,12 @@
 //! events and then exits cleanly. Combine with a stub `Broker` and you can
 //! drive actors end-to-end under `cargo test`.
 //!
+//! [`MarketDataReplayFeed`] is a timestamped variant: each event is paired
+//! with a `unix_ms` value and the feed advances a [`TestClock`] before each
+//! send. Wire the same `TestClock` into the harness via
+//! `HarnessBuilder::with_clock` to give strategies deterministic wall-clock
+//! time during replay.
+//!
 //! [`MockBroker`] is a programmable broker for testing. It records all calls
 //! (inspect via [`MockBroker::history`]) and optionally returns pre-queued
 //! responses — useful for testing retry logic, rate-limit handling, etc.
@@ -22,6 +28,7 @@ use tokio::sync::Mutex;
 use super::event::Event;
 use super::feed::{EventFeed, EventTx, FeedContext};
 use crate::broker::Broker;
+use crate::clock::TestClock;
 use crate::error::BotError;
 use crate::types::{
     Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult, Position,
@@ -47,6 +54,48 @@ impl<E: Event> EventFeed<E> for ScriptedFeed<E> {
             // Yield between events so actor handler tasks get scheduled before
             // the next send. Without this, tests that assert on intermediate
             // state are structurally flaky.
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    }
+}
+
+/// Timestamped replay feed. Like [`ScriptedFeed`] but advances a
+/// [`TestClock`] to each event's `unix_ms` before sending, so strategies
+/// that call `cx.clock().unix_ms()` see deterministic, event-driven time.
+///
+/// # Usage
+/// ```ignore
+/// let clock = TestClock::new(1_700_000_000_000);
+/// let feed = MarketDataReplayFeed::new(
+///     vec![(1_700_000_001_000, trade1), (1_700_000_002_000, trade2)],
+///     clock.clone(),
+/// );
+/// let harness = HarnessBuilder::new()
+///     .with_clock(Arc::new(clock))
+///     .wire_feed_named("trades", feed)
+///     .wire_actor(ActorSpec::new("strategy", my_actor).sub_critical::<Trade>())
+///     .build()?;
+/// ```
+pub struct MarketDataReplayFeed<E: Event> {
+    events: Vec<(u64, E)>,
+    clock: TestClock,
+}
+
+impl<E: Event> MarketDataReplayFeed<E> {
+    /// `events` is a `(unix_ms, event)` sequence. Events are sent in order;
+    /// the clock is advanced to each timestamp before the send.
+    pub fn new(events: Vec<(u64, E)>, clock: TestClock) -> Self {
+        Self { events, clock }
+    }
+}
+
+#[async_trait]
+impl<E: Event> EventFeed<E> for MarketDataReplayFeed<E> {
+    async fn run(self: Box<Self>, tx: EventTx<E>, _cx: FeedContext) -> Result<(), BotError> {
+        for (ts, event) in self.events {
+            self.clock.set_unix_ms(ts);
+            let _ = tx.send(event);
             tokio::task::yield_now().await;
         }
         Ok(())
@@ -246,5 +295,61 @@ impl Broker for MockBroker {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::events::Tick;
+    use crate::harness::{Actor, ActorContext, ActorSpec, EventHandler, HarnessBuilder};
+
+    struct TimestampCollector {
+        seen: Arc<Mutex<Vec<u64>>>,
+    }
+
+    #[async_trait]
+    impl Actor for TimestampCollector {}
+
+    #[async_trait]
+    impl EventHandler<Tick> for TimestampCollector {
+        async fn on_event(
+            &mut self,
+            _event: Tick,
+            cx: &ActorContext,
+        ) -> Result<(), crate::error::BotError> {
+            self.seen.lock().unwrap().push(cx.clock().unix_ms());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_feed_advances_clock() {
+        let clock = TestClock::new(0);
+        let seen: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let ticks = vec![
+            (1_000u64, Tick::now()),
+            (2_000u64, Tick::now()),
+            (3_000u64, Tick::now()),
+        ];
+        let feed = MarketDataReplayFeed::new(ticks, clock.clone());
+
+        let actor = TimestampCollector { seen: Arc::clone(&seen) };
+        let harness = HarnessBuilder::new()
+            .with_clock(Arc::new(clock))
+            .wire_feed_named("ticks", feed)
+            .wire_actor(ActorSpec::new("collector", actor).sub::<Tick>())
+            .build()
+            .unwrap();
+
+        harness.run().await.unwrap();
+
+        let got = seen.lock().unwrap().clone();
+        assert_eq!(got, vec![1_000, 2_000, 3_000]);
     }
 }
