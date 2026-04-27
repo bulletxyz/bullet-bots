@@ -1,0 +1,87 @@
+crates/strategies/grid/src/strategy.rs
+  399f7b5f311193aa 5-9,106-108,113,132-148,171-178,188-189,281-290,316-317,381,397,451-454,485,542,548-549,598,679-680
+crates/bb-core/src/helpers/parse.rs
+  399f7b5f311193aa 10-11
+crates/strategies/grid/src/config.rs
+  399f7b5f311193aa 113-116
+crates/exchanges/hyperliquid/src/convert.rs
+  399f7b5f311193aa 12-13,94,110,118,158
+crates/bb-core/src/events.rs
+  399f7b5f311193aa 5-10,12-14,16,20-21,98-99
+crates/strategies/reference-arb/src/config.rs
+  399f7b5f311193aa 106-108,111-113,118-123,154-155,204-215
+crates/exchanges/bullet/src/connection.rs
+  399f7b5f311193aa 9-14,95,107,132
+crates/exchanges/bullet/src/broker.rs
+  399f7b5f311193aa 158-159,172-173,290,296-315,317-320,322-331,333-356,360-362,365-375,393-423,425-426,429-450,454-455,457,460-471,487-581
+Cargo.toml
+  399f7b5f311193aa 46
+crates/exchanges/hyperliquid/src/broker.rs
+  399f7b5f311193aa 5-14,16,22-23,27-28,44-61,77,86,88,108,113-114,119-120,126-127,172,174-175,209,294-403,422-448,477-482,489,495-513
+AGENTS.md
+  399f7b5f311193aa 210-211,217,228,233,238-244,276,324-340
+crates/bb-core/src/helpers/tick_feed.rs
+  399f7b5f311193aa 31
+crates/strategies/avellaneda-stoikov/src/config.rs
+  399f7b5f311193aa 10-16
+crates/bb-core/examples/minimal.rs
+  399f7b5f311193aa 9-11,26-30,54
+crates/strategies/grid/src/ema.rs
+  399f7b5f311193aa 42
+crates/bb-core/src/harness/feed.rs
+  399f7b5f311193aa 90-93
+crates/bb-core/src/harness/builder.rs
+  399f7b5f311193aa 15,76,90,135,151-152,181-184,197-202,235,249,381
+crates/exchanges/binance/src/lib.rs
+  399f7b5f311193aa 14
+crates/bb-core/src/helpers/inventory.rs
+  399f7b5f311193aa 14,53,81-92,99-100,174-187
+crates/exchanges/hyperliquid/src/connection.rs
+  399f7b5f311193aa 6-9,11-14,27,57-58,65,68-69,104-105,170-171,176,206
+crates/bb-core/src/harness/mod.rs
+  399f7b5f311193aa 19-33
+crates/bb-core/src/broker.rs
+  399f7b5f311193aa 59-63,70,101
+HACKING.md
+  399f7b5f311193aa 325-361
+crates/exchanges/bullet/src/config.rs
+  399f7b5f311193aa 10-12,14-16,43-44,61-62,65-66
+crates/exchanges/hyperliquid/src/config.rs
+  399f7b5f311193aa 29-30,46-47,50-51
+crates/bb-bot/src/main.rs
+  399f7b5f311193aa 12,176-177,179-180,191-193,233,378,388,496-497,507-508,510,567-570,614-618,796-798
+crates/bb-core/src/harness/harness.rs
+  399f7b5f311193aa 4-5,8-10,16,63,74,82-84,88,110-111,143-146
+crates/bb-core/src/clock.rs
+  399f7b5f311193aa 47
+crates/bb-core/src/harness/testing.rs
+  399f7b5f311193aa 308,310-312,338,354-393
+crates/exchanges/binance/src/feed.rs
+  399f7b5f311193aa 190
+crates/bb-core/src/harness/bus.rs
+  399f7b5f311193aa 51,59,66-68
+crates/bb-core/src/harness/status.rs
+  399f7b5f311193aa 56-57,59
+crates/exchanges/bullet/src/convert.rs
+  399f7b5f311193aa 162-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c2a90be7811e4ac27d71191bcd31ac1fb2223408",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 885,
+      "total_deletions": 458,
+      "accepted_lines": 885,
+      "overriden_lines": 0
+    }
+  }
+}
