@@ -44,6 +44,13 @@ pub struct FundingArbActor {
 
 impl FundingArbActor {
     pub fn new(config: FundingArbConfig) -> Self {
+        Self::with_client_ids(config, ClientIdIssuer::session_seeded())
+    }
+
+    /// Construct with an explicit `ClientIdIssuer`. Use `ClientIdIssuer::new()`
+    /// (starts at 1) in tests to get deterministic client_ids so scripted fills
+    /// can carry the expected id without knowing the session epoch.
+    pub fn with_client_ids(config: FundingArbConfig, client_ids: ClientIdIssuer) -> Self {
         let mut inventory = HashMap::new();
         inventory.insert(config.exchange_a.clone(), InventoryTracker::new());
         inventory.insert(config.exchange_b.clone(), InventoryTracker::new());
@@ -52,7 +59,7 @@ impl FundingArbActor {
             state: ArbState::new(),
             inventory,
             books: HashMap::new(),
-            client_ids: ClientIdIssuer::session_seeded(),
+            client_ids,
             my_client_ids: HashSet::new(),
         }
     }
@@ -501,5 +508,173 @@ impl EventHandler<Tick> for FundingArbActor {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bb_core::broker::Broker;
+    use bb_core::events::{MarkPriceUpdate, Tick, Trade};
+    use bb_core::harness::testing::{MockBroker, ScriptedFeed};
+    use bb_core::harness::{ActorSpec, HarnessBuilder};
+    use bb_core::helpers::ClientIdIssuer;
+    use bb_core::types::Side;
+    use rust_decimal::Decimal;
+
+    use super::*;
+    use crate::config::{FundingArbConfig, OrderMode};
+
+    fn d(s: &str) -> Decimal {
+        s.parse().unwrap()
+    }
+
+    fn test_config() -> FundingArbConfig {
+        FundingArbConfig {
+            symbol: "BTC-PERP".into(),
+            exchange_a: "bullet".into(),
+            exchange_b: "hl".into(),
+            entry_threshold: d("0.001"),
+            exit_threshold: d("0.0001"),
+            order_size: d("1"),
+            max_delta_imbalance: d("10"),
+            max_funding_rate: d("0.01"),
+            order_mode: OrderMode::Aggressive,
+            phase_timeout_secs: 3600,
+            slippage: d("0"),
+            min_flat_hold_secs: 0,
+        }
+    }
+
+    fn mark(exchange: &str, mark_price: &str, rate: Option<&str>) -> MarkPriceUpdate {
+        MarkPriceUpdate {
+            exchange: exchange.into(),
+            symbol: "BTC-PERP".into(),
+            mark_price: d(mark_price),
+            funding_rate: rate.map(d),
+        }
+    }
+
+    fn fill(exchange: &str, side: Side, cid: &str) -> Trade {
+        Trade {
+            exchange: exchange.into(),
+            symbol: "BTC-PERP".into(),
+            order_id: String::new(),
+            trade_id: None,
+            client_id: Some(cid.into()),
+            side,
+            price: d("100"),
+            quantity: d("1"),
+            timestamp: None,
+        }
+    }
+
+    fn foreign_trade() -> Trade {
+        Trade {
+            exchange: "other".into(),
+            symbol: "BTC-PERP".into(),
+            order_id: String::new(),
+            trade_id: None,
+            client_id: None,
+            side: Side::Buy,
+            price: d("100"),
+            quantity: d("1"),
+            timestamp: None,
+        }
+    }
+
+    /// Full `Flat → Entering → Active → Exiting → Flat` cycle driven by
+    /// `ScriptedFeed`s and `MockBroker`.
+    ///
+    /// Three parallel feeds run in interleaved fashion (current_thread +
+    /// yield_now between events). Fills are placed 3 rounds after the entry
+    /// trigger so they're guaranteed to arrive after `enter()` has issued the
+    /// client_ids they carry.
+    ///
+    /// Round-by-round:
+    ///   0: rate_a set, skip, tick (Flat — mark_b still 0)
+    ///   1: rate_b set → ENTRY (cids "1","2"), skip, tick (Entering 0/2)
+    ///   2: narrow rate_a, skip, tick (Entering 0/2)
+    ///   3: narrow rate_b, fill cid=1 (bullet), tick (Entering 1/2)
+    ///   4: padding, fill cid=2 (hl), tick (Entering → Active)
+    ///   5: padding, skip, tick (Active → EXIT, cids "3","4" issued)
+    ///   6: padding, close cid=3 (bullet), tick (Exiting 1/2)
+    ///   7: padding, close cid=4 (hl), tick (Exiting → Flat, cycles=1)
+    ///   8: padding, skip, tick (Flat, no-op)
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_arb_cycle_flat_to_entering_to_active_to_exiting_to_flat() {
+        let bullet = MockBroker::shared("bullet");
+        let hl = MockBroker::shared("hl");
+
+        // rate_a > rate_b → bullet is the short leg (cid="1"), hl is the long leg (cid="2")
+        let marks = ScriptedFeed::new(vec![
+            mark("bullet", "100", Some("0.002")),    // [0] rate_a wide
+            mark("hl",     "100", Some("0.0005")),   // [1] rate_b wide → ENTRY
+            mark("bullet", "100", Some("0.00005")),  // [2] narrow rate_a
+            mark("hl",     "100", Some("0.00003")),  // [3] narrow rate_b (spread 0.00002 < 0.0001)
+            mark("bullet", "100", Some("0.00005")),  // [4] padding
+            mark("hl",     "100", Some("0.00003")),  // [5] padding
+            mark("bullet", "100", Some("0.00005")),  // [6] padding
+            mark("hl",     "100", Some("0.00003")),  // [7] padding
+            mark("bullet", "100", Some("0.00005")),  // [8] padding
+        ]);
+        let trades = ScriptedFeed::new(vec![
+            foreign_trade(),              // [0] skip
+            foreign_trade(),              // [1] skip (entry fires in this round — fills not yet)
+            foreign_trade(),              // [2] skip
+            fill("bullet", Side::Sell, "1"), // [3] short leg filled (cid="1" guaranteed in my_ids)
+            fill("hl",     Side::Buy,  "2"), // [4] long leg filled
+            foreign_trade(),              // [5] skip
+            fill("bullet", Side::Buy,  "3"), // [6] close short (cid="3" issued by exit in round 5)
+            fill("hl",     Side::Sell, "4"), // [7] close long
+            foreign_trade(),              // [8] skip
+        ]);
+        let ticks = ScriptedFeed::new(vec![
+            Tick::now(), // [0] Flat, no-op
+            Tick::now(), // [1] Entering, 0/2 filled
+            Tick::now(), // [2] Entering, 0/2 filled
+            Tick::now(), // [3] Entering, 1/2 filled (only bullet)
+            Tick::now(), // [4] Entering → both filled → Active
+            Tick::now(), // [5] Active → spread narrow → EXIT (cids "3","4" issued)
+            Tick::now(), // [6] Exiting, 1/2 closed
+            Tick::now(), // [7] Exiting → both flat → cycles=1 → Flat
+            Tick::now(), // [8] Flat, no-op
+        ]);
+
+        let actor = FundingArbActor::with_client_ids(test_config(), ClientIdIssuer::new());
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", bullet.clone() as Arc<dyn Broker>)
+            .wire_broker("hl", hl.clone() as Arc<dyn Broker>)
+            .wire_feed_named("marks", marks)
+            .wire_feed_named("trades", trades)
+            .wire_feed_named("ticks", ticks)
+            .wire_actor(
+                ActorSpec::new("funding-arb", actor)
+                    .sub::<MarkPriceUpdate>()
+                    .sub_critical::<Trade>()
+                    .sub::<Tick>(),
+            )
+            .build()
+            .unwrap();
+
+        harness.run().await.unwrap();
+
+        // Both brokers should have received exactly 2 place_orders calls:
+        // one for entry and one for exit.
+        assert_eq!(bullet.placed_count().await, 2, "bullet: expected entry + exit");
+        assert_eq!(hl.placed_count().await, 2, "hl: expected entry + exit");
+
+        // Verify entry orders: bullet=short (Sell), hl=long (Buy)
+        let bullet_hist = bullet.history().await;
+        let place_calls: Vec<_> =
+            bullet_hist.iter().filter(|c| c.method == "place_orders").collect();
+        assert_eq!(place_calls[0].orders[0].side, Side::Sell, "bullet entry is Sell");
+        assert_eq!(place_calls[1].orders[0].side, Side::Buy, "bullet close is Buy");
+
+        let hl_hist = hl.history().await;
+        let hl_place: Vec<_> = hl_hist.iter().filter(|c| c.method == "place_orders").collect();
+        assert_eq!(hl_place[0].orders[0].side, Side::Buy, "hl entry is Buy");
+        assert_eq!(hl_place[1].orders[0].side, Side::Sell, "hl close is Sell");
     }
 }
