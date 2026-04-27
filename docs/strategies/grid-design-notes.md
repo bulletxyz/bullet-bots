@@ -2,7 +2,7 @@
 
 This document situates the `bb-bots` grid strategy against retail grid bots,
 the open-source market-making stack, and the academic literature. The
-engineering roadmap lives in [`FUTURE_WORK.md`](./FUTURE_WORK.md); this is the
+engineering roadmap lives in [`grid-future-work.md`](./grid-future-work.md); this is the
 evidence base behind it.
 
 ## 1. Landscape of grid bots
@@ -55,7 +55,7 @@ Points that appear across independent practitioner sources:
    writeups recommend 2%+ spacing at standard tiers; guides treat this as a
    floor rather than a tuning choice
    ([wundertrading](https://wundertrading.com/journal/en/learn/article/best-grid-bot-settings)).
-   Same invariant as our `FUTURE_WORK.md` "Core economics" section.
+   Same invariant as our `grid-future-work.md` "Core economics" section.
 
 3. **Trend filtering or re-centering beats spacing tuning.** 3Commas' flagship
    2024 change was trailing down, and Bitsgap bundles trailing with Pump
@@ -125,7 +125,7 @@ stop-range, and AI parameter suggestions those have had for years.
 Three recommendations follow:
 
 - **Do this first (table stakes).** Build the backtester from
-  [`FUTURE_WORK.md`](./FUTURE_WORK.md) with a realistic fill model (opposing
+  [`grid-future-work.md`](./grid-future-work.md) with a realistic fill model (opposing
   side trading *through* the quote, not just touching). Every retail
   competitor above Pionex ships one; without it, spacing, bias, and trend
   filter choices are unfalsifiable. It gates the ROI of every other item.
@@ -143,4 +143,3 @@ Three recommendations follow:
   crypto maker without a meaningful T. A linear inventory skew à la
   `pure_market_making` captures the useful part at a fraction of the
   calibration cost.
-

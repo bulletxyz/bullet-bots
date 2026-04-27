@@ -172,7 +172,9 @@ async fn muxer_loop(
                     let _ = book_tx.send(convert::book_ticker_to_event(bt));
                 }
                 ServerMessage::MarkPrice(ref mp) => {
-                    let _ = mark_tx.send(convert::mark_price_to_event(mp));
+                    if let Some(event) = convert::mark_price_to_event(mp) {
+                        let _ = mark_tx.send(event);
+                    }
                 }
                 ServerMessage::OrderUpdate(ref update) => {
                     if update.event_time < last_order_event_time {

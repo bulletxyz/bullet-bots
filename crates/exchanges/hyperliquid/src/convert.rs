@@ -1,13 +1,13 @@
 //! Shared value-conversion helpers used by the Hyperliquid broker + connection.
 
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
+use bb_core::helpers::parse_decimal_or_warn;
 use bb_core::types::{Balance, Order, OrderBook, OrderStatus, OrderType, Position, Side};
 use hyperliquid_rust_sdk::{
     ActiveAssetCtxData, AssetCtx, L2BookData, L2SnapshotResponse, OrderUpdate, TradeInfo,
     UserStateResponse,
 };
 use rust_decimal::Decimal;
-use std::str::FromStr;
 
 const EXCHANGE: &str = "hyperliquid";
 
@@ -98,14 +98,16 @@ pub fn fill_to_trade(fill: &TradeInfo) -> Option<Trade> {
             return None;
         }
     };
+    let price = parse_decimal_or_warn(&fill.px, "px")?;
+    let quantity = parse_decimal_or_warn(&fill.sz, "sz")?;
     Some(Trade {
         exchange: EXCHANGE.into(),
         symbol: to_bb_symbol(&fill.coin),
         order_id: fill.oid.to_string(),
         client_id: fill.cloid.as_ref().map(|c| c.to_string()),
         side,
-        price: parse_dec(&fill.px),
-        quantity: parse_dec(&fill.sz),
+        price,
+        quantity,
     })
 }
 
@@ -164,10 +166,10 @@ pub fn order_update_to_lifecycle(update: &OrderUpdate) -> OrderLifecycle {
 pub fn active_asset_ctx_to_mark(data: &ActiveAssetCtxData) -> Option<MarkPriceUpdate> {
     let (mark, funding) = match &data.ctx {
         AssetCtx::Perps(p) => (
-            Decimal::from_str(&p.shared.mark_px).ok()?,
-            Decimal::from_str(&p.funding).unwrap_or(Decimal::ZERO),
+            parse_decimal_or_warn(&p.shared.mark_px, "mark_px")?,
+            parse_decimal_or_warn(&p.funding, "funding").unwrap_or(Decimal::ZERO),
         ),
-        AssetCtx::Spot(s) => (Decimal::from_str(&s.shared.mark_px).ok()?, Decimal::ZERO),
+        AssetCtx::Spot(s) => (parse_decimal_or_warn(&s.shared.mark_px, "mark_px")?, Decimal::ZERO),
     };
     Some(MarkPriceUpdate {
         exchange: EXCHANGE.into(),

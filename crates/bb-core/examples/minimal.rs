@@ -3,8 +3,6 @@
 //! Run with:
 //!   cargo run --example minimal -p bb-core
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use bb_core::error::BotError;
 use bb_core::events::Tick;

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
+use bb_core::helpers::parse_decimal_or_warn;
 use bb_core::types::{Order, OrderBook, OrderStatus, OrderType, Side};
 use bullet_rust_sdk::types::{
     BookTickerMessage, DepthUpdate, MarkPriceMessage, OrderUpdateData, OrderUpdateMessage,
@@ -62,13 +63,18 @@ pub fn book_ticker_to_event(bt: &BookTickerMessage) -> BookUpdate {
     }
 }
 
-pub fn mark_price_to_event(mp: &MarkPriceMessage) -> MarkPriceUpdate {
-    MarkPriceUpdate {
+/// Returns `None` if `mark_price` fails to parse (skip the update entirely).
+/// A bad mark price would silently corrupt PnL accounting downstream.
+pub fn mark_price_to_event(mp: &MarkPriceMessage) -> Option<MarkPriceUpdate> {
+    let mark_price = parse_decimal_or_warn(&mp.mark_price, "mark_price")?;
+    let funding_rate =
+        parse_decimal_or_warn(&mp.funding_rate, "funding_rate").unwrap_or(Decimal::ZERO);
+    Some(MarkPriceUpdate {
         exchange: EXCHANGE.into(),
         symbol: mp.symbol.clone(),
-        mark_price: Decimal::from_str(&mp.mark_price).unwrap_or_default(),
-        funding_rate: Decimal::from_str(&mp.funding_rate).unwrap_or_default(),
-    }
+        mark_price,
+        funding_rate,
+    })
 }
 
 /// Extract a `Trade` from `OrderUpdateData::TradeFill`. Returns `None` for
@@ -83,14 +89,16 @@ pub fn order_update_to_trade(msg: &OrderUpdateMessage) -> Option<Trade> {
             return None;
         }
     };
+    let price = parse_decimal_or_warn(&data.last_filled_price, "last_filled_price")?;
+    let quantity = parse_decimal_or_warn(&data.last_filled_qty, "last_filled_qty")?;
     Some(Trade {
         exchange: EXCHANGE.into(),
         symbol: data.common.symbol.clone(),
         order_id: data.common.order_id.to_string(),
         client_id: data.common.client_order_id.as_ref().map(|c| c.to_string()),
         side,
-        price: data.last_filled_price.parse().unwrap_or_default(),
-        quantity: data.last_filled_qty.parse().unwrap_or_default(),
+        price,
+        quantity,
     })
 }
 
