@@ -44,25 +44,13 @@ pub enum ExitReason {
 
 #[derive(Debug, Clone)]
 pub enum ArbState {
-    Flat {
-        pending_signal_side: Option<Side>,
-        pending_signal_streak: u32,
-    },
-    Entering {
-        client_id: String,
-        side: Side,
-        entry_spread_bps: Decimal,
-    },
-    Holding {
-        side: Side,
-        entry_spread_bps: Decimal,
-        ticks: u32,
-    },
-    Exiting {
-        client_id: String,
-        reason: ExitReason,
-        entry_side: Side,
-    },
+    Flat { pending_signal_side: Option<Side>, pending_signal_streak: u32 },
+    Entering { client_id: String, side: Side, entry_spread_bps: Decimal },
+    Holding { side: Side, entry_spread_bps: Decimal, ticks: u32 },
+    /// `ticks_at_exit` preserves the hold counter so that if this exit is
+    /// cancelled and we drop back to Holding, `max_hold_ticks` remains a hard
+    /// bound — without it the counter would reset to 0 on every failed exit.
+    Exiting { client_id: String, reason: ExitReason, entry_side: Side, ticks_at_exit: u32 },
 }
 
 impl ArbState {
@@ -96,11 +84,15 @@ pub struct ReferenceArbActor {
 
 impl ReferenceArbActor {
     pub fn new(config: ReferenceArbConfig) -> Self {
+        Self::with_client_ids(config, ClientIdIssuer::session_seeded())
+    }
+
+    pub fn with_client_ids(config: ReferenceArbConfig, client_ids: ClientIdIssuer) -> Self {
         Self {
             config,
             state: ArbState::flat(),
             inventory: InventoryTracker::new(),
-            client_ids: ClientIdIssuer::session_seeded(),
+            client_ids,
             bullet_book: None,
             bullet_mid: None,
             binance_mid: None,
@@ -148,7 +140,7 @@ impl ReferenceArbActor {
     fn reference_is_stale(&self) -> bool {
         match self.binance_last_seen {
             None => true,
-            Some(t) => t.elapsed() > Duration::from_secs(self.config.reference_stale_secs),
+            Some(t) => t.elapsed() > Duration::from_secs(self.config.reference_stale_secs.max(1)),
         }
     }
 
@@ -265,11 +257,7 @@ impl ReferenceArbActor {
                 net_pos = %self.inventory.net_position,
                 "PAPER entry (dry_run): simulated market fill, entering Holding"
             );
-            self.state = ArbState::Holding {
-                side,
-                entry_spread_bps: spread_bps,
-                ticks: 0,
-            };
+            self.state = ArbState::Holding { side, entry_spread_bps: spread_bps, ticks: 0 };
             return Ok(());
         }
 
@@ -296,12 +284,16 @@ impl ReferenceArbActor {
 
         let broker = cx.broker(&self.config.exchange)?;
         match broker.place_orders(&[order]).await {
-            Ok(_) => {
-                self.state = ArbState::Entering {
-                    client_id,
-                    side,
-                    entry_spread_bps: spread_bps,
-                };
+            Ok(results) if results.first().is_some_and(|r| r.success) => {
+                self.state = ArbState::Entering { client_id, side, entry_spread_bps: spread_bps };
+            }
+            Ok(results) => {
+                let error = results
+                    .first()
+                    .and_then(|r| r.error.as_deref())
+                    .unwrap_or("order rejected without error");
+                tracing::warn!(error, "Entry order rejected");
+                self.state = ArbState::flat();
             }
             Err(e) => {
                 tracing::error!(error = %e, "Entry order placement failed");
@@ -395,10 +387,25 @@ impl ReferenceArbActor {
             "Exit signal: placing closing market order"
         );
 
+        // Capture hold ticks before transitioning so we can restore them if
+        // this exit order is later cancelled and we drop back to Holding.
+        let ticks_at_exit = match &self.state {
+            ArbState::Holding { ticks, .. } => *ticks,
+            _ => 0,
+        };
+
         let broker = cx.broker(&self.config.exchange)?;
         match broker.place_orders(&[order]).await {
-            Ok(_) => {
-                self.state = ArbState::Exiting { client_id, reason, entry_side };
+            Ok(results) if results.first().is_some_and(|r| r.success) => {
+                self.state = ArbState::Exiting { client_id, reason, entry_side, ticks_at_exit };
+            }
+            Ok(results) => {
+                let error = results
+                    .first()
+                    .and_then(|r| r.error.as_deref())
+                    .unwrap_or("order rejected without error");
+                tracing::warn!(error, "Exit order rejected; will retry on tick");
+                // Stay in Holding so the tick handler can re-attempt.
             }
             Err(e) => {
                 tracing::error!(error = %e, "Exit order placement failed; will retry on tick");
@@ -461,18 +468,18 @@ impl Actor for ReferenceArbActor {
 
     async fn wind_down(
         &mut self,
-        reason: &WindDownReason,
+        _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
         let broker = cx.broker(&self.config.exchange)?;
         let _ = broker.cancel_all_orders(&self.config.symbol).await;
 
-        // On FeedFailed we can't trust the current price — skip the flatten
-        // to avoid sending an order based on a stale or missing reference.
-        // For all other reasons (Signal, InputsClosed, ActorFailed) we attempt
-        // to close any open position before exiting.
-        let should_flatten = !matches!(reason, WindDownReason::FeedFailed { .. });
-        if should_flatten && !self.inventory.net_position.is_zero() {
+        // Always attempt to flatten any open position. The original concern was
+        // using a stale Binance reference for the exit price, but exit orders
+        // are market orders priced from the Bullet book — Binance staleness is
+        // irrelevant. If the Bullet feed itself failed we still have broker
+        // access and place_exit handles missing price data gracefully.
+        if !self.inventory.net_position.is_zero() {
             let spread = self.compute_spread_bps().unwrap_or(Decimal::ZERO);
             let _ = self.place_exit(cx, ExitReason::WindDown, spread).await;
         }
@@ -538,9 +545,7 @@ impl EventHandler<Trade> for ReferenceArbActor {
         if event.exchange != self.config.exchange || event.symbol != self.config.symbol {
             return Ok(());
         }
-        let realized = self
-            .inventory
-            .record_fill(event.side, event.price, event.quantity);
+        let realized = self.inventory.record_fill(event.side, event.price, event.quantity);
 
         // Transition only when this fill belongs to the current in-flight order.
         if !self.matches_current_order(event.client_id.as_deref()) {
@@ -611,10 +616,7 @@ impl EventHandler<OrderLifecycle> for ReferenceArbActor {
                     // is the best estimate we have.
                     self.state = if self.inventory.net_position.is_zero() {
                         ArbState::flat()
-                    } else if let ArbState::Entering {
-                        side, entry_spread_bps, ..
-                    } = &self.state
-                    {
+                    } else if let ArbState::Entering { side, entry_spread_bps, .. } = &self.state {
                         ArbState::Holding {
                             side: *side,
                             entry_spread_bps: *entry_spread_bps,
@@ -624,7 +626,7 @@ impl EventHandler<OrderLifecycle> for ReferenceArbActor {
                         ArbState::flat()
                     };
                 }
-                ArbState::Exiting { reason, entry_side, .. } => {
+                ArbState::Exiting { reason, entry_side, ticks_at_exit, .. } => {
                     tracing::warn!(
                         client_id = ?event.order.client_id,
                         status = ?event.order.status,
@@ -632,13 +634,13 @@ impl EventHandler<OrderLifecycle> for ReferenceArbActor {
                         "Exit order cancelled/rejected; tick handler will retry"
                     );
                     // Drop back to Holding so the tick handler re-places the exit.
-                    // entry_spread_bps is not preserved across Exiting — use zero
-                    // (next re-place relies on TP/SL still being true, which it
-                    // is if we're still in adverse territory).
+                    // Restore the tick count so max_hold_ticks stays monotonic —
+                    // resetting to 0 would allow the position to be held indefinitely
+                    // through repeated failed exits.
                     self.state = ArbState::Holding {
                         side: *entry_side,
                         entry_spread_bps: Decimal::ZERO,
-                        ticks: 0,
+                        ticks: *ticks_at_exit,
                     };
                 }
                 _ => {}
@@ -670,10 +672,9 @@ impl EventHandler<Tick> for ReferenceArbActor {
             self.place_exit(cx, ExitReason::Timeout, spread).await?;
         }
 
-        // 2. If we hold residual inventory but no in-flight order (e.g. after
-        //    a cancelled exit), retry the exit.
-        if matches!(&self.state, ArbState::Holding { .. })
-            && !self.inventory.net_position.is_zero()
+        // 2. If we hold residual inventory but no in-flight order (e.g. after a cancelled exit),
+        //    retry the exit.
+        if matches!(&self.state, ArbState::Holding { .. }) && !self.inventory.net_position.is_zero()
         {
             // Do nothing — normal Holding state, exit driven by spread. The
             // reconcile branch only fires when state is confused; see note in
@@ -815,5 +816,163 @@ mod tests {
         let mut a = actor();
         a.bullet_mid = Some(Decimal::from(100));
         assert_eq!(a.compute_spread_bps(), None);
+    }
+
+    // Full-cycle integration test ------------------------------------------
+
+    /// Drives the complete state machine Flat → Entering → Holding → Exiting → Flat
+    /// through a harness with ScriptedFeed + MockBroker.
+    ///
+    /// Event layout (6 rounds, one event per feed per round):
+    ///
+    ///   Round 1: book sets bullet_mid=100_150; ref sets binance_mid=100_000
+    ///            → spread=+15bps, persistence streak=1 of 1 → ENTRY (Sell cid="1")
+    ///   Round 2: padding; Trade cid="1" (Sell) → Holding
+    ///   Rounds 3-4: padding refs (spread still 15bps, no exit)
+    ///   Round 5: ref sets binance_mid=100_120 → spread≈3bps ≤ exit_threshold(3) → TP EXIT (Buy
+    /// cid="2")   Round 6: Trade cid="2" (Buy) → exit fill → Flat
+    ///
+    /// Spread arithmetic:
+    ///   bullet_mid = (100_140 + 100_160) / 2 = 100_150
+    ///   entry: (100_150 − 100_000) / 100_000 × 10_000 = 15 bps
+    ///   exit:  (100_150 − 100_120) / 100_120 × 10_000 ≈ 2.997 bps ≤ 3 (TP)
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_arb_cycle_flat_entering_holding_exiting_flat() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        use bb_core::events::{BookUpdate, Trade};
+        use bb_core::harness::{ActorSpec, HarnessBuilder, MockBroker, ScriptedFeed};
+        use bb_core::helpers::ClientIdIssuer;
+        use bb_core::types::OrderBook;
+        use bb_exchange_binance::ReferencePriceUpdate;
+
+        // ---- fixtures -------------------------------------------------------
+
+        // Book: bid=100_140, ask=100_160 → midpoint=100_150
+        // Reference 100_000 → spread = 15 bps (entry threshold)
+        // Reference 100_120 → spread ≈ 2.997 bps < 3 bps (take-profit threshold)
+        let book = {
+            let mut bids = BTreeMap::new();
+            bids.insert(Decimal::from(100_140), Decimal::new(1, 1));
+            let mut asks = BTreeMap::new();
+            asks.insert(Decimal::from(100_160), Decimal::new(1, 1));
+            OrderBook { bids, asks, last_update_id: 1 }
+        };
+        let book_evt = |b: OrderBook| BookUpdate {
+            exchange: "bullet".into(),
+            symbol: "BTC-USD".into(),
+            orderbook: b,
+        };
+        let ref_evt = |mid_i: i64| ReferencePriceUpdate {
+            symbol: "btcusdt".into(),
+            mid: Decimal::from(mid_i),
+            received_at: Instant::now(),
+        };
+        let trade_evt = |side: Side, cid: &str| Trade {
+            exchange: "bullet".into(),
+            symbol: "BTC-USD".into(),
+            order_id: String::new(),
+            trade_id: None,
+            client_id: Some(cid.into()),
+            side,
+            price: Decimal::from(100_150),
+            quantity: Decimal::new(1, 3),
+            timestamp: None,
+        };
+        let pad_trade = || Trade {
+            exchange: "other".into(), // filtered by exchange check
+            symbol: "BTC-USD".into(),
+            order_id: String::new(),
+            trade_id: None,
+            client_id: None,
+            side: Side::Buy,
+            price: Decimal::ZERO,
+            quantity: Decimal::ZERO,
+            timestamp: None,
+        };
+
+        // ---- feeds ----------------------------------------------------------
+        //
+        // ClientIdIssuer::new() issues "1", "2", ... deterministically.
+        // Entry order → cid "1", exit order → cid "2".
+        //
+        // Exit refs start at R5 so the entry-trade (R2) has ample time to be
+        // processed (state→Holding) before the TP trigger arrives.
+
+        let books = ScriptedFeed::new(vec![
+            book_evt(book.clone()), // R1
+            book_evt(book.clone()), // R2
+            book_evt(book.clone()), // R3
+            book_evt(book.clone()), // R4
+            book_evt(book.clone()), // R5
+            book_evt(book.clone()), // R6
+        ]);
+        let references = ScriptedFeed::new(vec![
+            ref_evt(100_000), // R1: spread=+15bps → ENTRY on first Flat evaluation
+            ref_evt(100_000), // R2: spread=+15bps (Entering → no-op)
+            ref_evt(100_000), // R3: spread=+15bps (Holding, below SL → no exit)
+            ref_evt(100_000), // R4: spread=+15bps (Holding, below SL → no exit)
+            ref_evt(100_120), // R5: spread≈3bps ≤ exit_threshold → TP EXIT
+            ref_evt(100_120), // R6: Exiting or Flat → no-op
+        ]);
+        let trades = ScriptedFeed::new(vec![
+            pad_trade(),                // R1
+            trade_evt(Side::Sell, "1"), // R2: entry fill → Holding
+            pad_trade(),                // R3
+            pad_trade(),                // R4
+            pad_trade(),                // R5
+            trade_evt(Side::Buy, "2"),  /* R6: exit fill → Flat (prevents wind_down from
+                                         * re-flattening) */
+        ]);
+
+        // ---- actor + broker -------------------------------------------------
+
+        let broker = MockBroker::shared("bullet");
+        let mut config = base_config();
+        config.persistence_ticks = 1; // fire on first qualifying evaluation
+        let actor = ReferenceArbActor::with_client_ids(config, ClientIdIssuer::new());
+
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", Arc::clone(&broker) as Arc<dyn bb_core::broker::Broker>)
+            .wire_feed_named("books", books)
+            .wire_feed_named("references", references)
+            .wire_feed_named("trades", trades)
+            .wire_actor(
+                ActorSpec::new("arb", actor)
+                    .sub::<BookUpdate>()
+                    .sub::<ReferencePriceUpdate>()
+                    .sub_critical::<Trade>(),
+            )
+            .build()
+            .unwrap();
+
+        harness.run().await.unwrap();
+
+        // ---- assertions -----------------------------------------------------
+
+        assert_eq!(broker.placed_count().await, 2, "expected entry + exit order");
+
+        let entry_orders = broker
+            .history()
+            .await
+            .into_iter()
+            .filter(|c| c.method == "place_orders")
+            .nth(0)
+            .map(|c| c.orders)
+            .unwrap_or_default();
+        assert_eq!(entry_orders.len(), 1);
+        assert_eq!(entry_orders[0].side, Side::Sell, "entry should be short Bullet");
+
+        let exit_orders = broker
+            .history()
+            .await
+            .into_iter()
+            .filter(|c| c.method == "place_orders")
+            .nth(1)
+            .map(|c| c.orders)
+            .unwrap_or_default();
+        assert_eq!(exit_orders.len(), 1);
+        assert_eq!(exit_orders[0].side, Side::Buy, "exit should buy to close short");
     }
 }

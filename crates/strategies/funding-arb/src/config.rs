@@ -86,3 +86,77 @@ fn default_slippage() -> Decimal {
 fn default_min_flat_hold_secs() -> u64 {
     60
 }
+
+impl FundingArbConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.order_size <= Decimal::ZERO {
+            return Err("order_size must be positive".into());
+        }
+        if self.entry_threshold <= Decimal::ZERO {
+            return Err("entry_threshold must be positive".into());
+        }
+        if self.exit_threshold >= self.entry_threshold {
+            return Err(format!(
+                "exit_threshold ({}) must be less than entry_threshold ({})",
+                self.exit_threshold, self.entry_threshold
+            ));
+        }
+        if self.max_delta_imbalance <= Decimal::ZERO {
+            return Err("max_delta_imbalance must be positive".into());
+        }
+        if self.slippage < Decimal::ZERO {
+            return Err("slippage must be non-negative".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> FundingArbConfig {
+        FundingArbConfig {
+            symbol: "BTC-PERP".into(),
+            exchange_a: "bullet".into(),
+            exchange_b: "hl".into(),
+            entry_threshold: Decimal::new(5, 4),
+            exit_threshold: Decimal::new(1, 4),
+            order_size: Decimal::ONE,
+            max_delta_imbalance: Decimal::new(5, 3),
+            max_funding_rate: Decimal::new(5, 3),
+            order_mode: OrderMode::Aggressive,
+            phase_timeout_secs: 30,
+            slippage: Decimal::new(1, 3),
+            min_flat_hold_secs: 60,
+        }
+    }
+
+    #[test]
+    fn base_config_is_valid() {
+        assert!(base().validate().is_ok());
+    }
+
+    #[test]
+    fn exit_threshold_must_be_less_than_entry() {
+        let mut c = base();
+        c.exit_threshold = c.entry_threshold; // equal → invalid
+        assert!(c.validate().is_err());
+        c.exit_threshold = c.entry_threshold + Decimal::ONE; // greater → invalid
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn order_size_must_be_positive() {
+        let mut c = base();
+        c.order_size = Decimal::ZERO;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn max_delta_imbalance_must_be_positive() {
+        let mut c = base();
+        c.max_delta_imbalance = Decimal::ZERO;
+        assert!(c.validate().is_err());
+    }
+}

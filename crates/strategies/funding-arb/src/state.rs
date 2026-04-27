@@ -3,10 +3,9 @@
 
 use std::time::Instant;
 
+use bb_core::types::Side;
 use rust_decimal::Decimal;
 use serde::Serialize;
-
-use bb_core::types::Side;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub enum ArbPhase {
@@ -40,6 +39,12 @@ pub struct ArbState {
     pub leg_b: Option<ArbLeg>,
     pub rate_a: Decimal,
     pub rate_b: Decimal,
+    /// True once exchange A has sent at least one `funding_rate: Some(...)`.
+    /// The default zero for `rate_a` is not a real rate and must not be used
+    /// to decide whether a spread is tradeable.
+    pub has_rate_a: bool,
+    /// True once exchange B has sent at least one `funding_rate: Some(...)`.
+    pub has_rate_b: bool,
     pub mark_a: Decimal,
     pub mark_b: Decimal,
     pub phase_entered_at: Option<Instant>,
@@ -67,8 +72,7 @@ impl ArbState {
     }
 
     pub fn phase_timed_out(&self, timeout_secs: u64) -> bool {
-        self.phase_entered_at
-            .is_some_and(|t| t.elapsed().as_secs() >= timeout_secs)
+        self.phase_entered_at.is_some_and(|t| t.elapsed().as_secs() >= timeout_secs)
     }
 
     pub fn go_flat(&mut self) {

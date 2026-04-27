@@ -2,9 +2,9 @@
 //!
 //! Two-venue delta-neutral strategy. Subscribed events:
 //!   - `MarkPriceUpdate` — cache mark + funding per venue; trigger entry.
-//!   - `Trade` — canonical source of position changes *per venue*. One
-//!     `InventoryTracker` per venue via a `HashMap<exchange, tracker>`.
-//!     The net_delta across both trackers should tend to zero while Active.
+//!   - `Trade` — canonical source of position changes *per venue*. One `InventoryTracker` per venue
+//!     via a `HashMap<exchange, tracker>`. The net_delta across both trackers should tend to zero
+//!     while Active.
 //!   - `BookUpdate` — cache best bid/ask for aggressive pricing.
 //!   - `Tick` — phase-timeout checks, delta-imbalance guard, exit condition.
 //!
@@ -105,11 +105,7 @@ impl FundingArbActor {
             Side::Sell => b.best_bid().map(|l| l.price),
         });
         let base = book_price.unwrap_or_else(|| {
-            if exchange == self.config.exchange_a {
-                self.state.mark_a
-            } else {
-                self.state.mark_b
-            }
+            if exchange == self.config.exchange_a { self.state.mark_a } else { self.state.mark_b }
         });
         match side {
             Side::Buy => base * (Decimal::ONE + self.config.slippage),
@@ -169,11 +165,35 @@ impl FundingArbActor {
         let (short_b, long_b) = (cx.broker(&short_ex)?, cx.broker(&long_ex)?);
         let (short_res, long_res) =
             tokio::join!(short_b.place_orders(&short_orders), long_b.place_orders(&long_orders));
+
+        let short_ok = short_res
+            .as_ref()
+            .ok()
+            .and_then(|r| r.first())
+            .is_some_and(|r| r.success);
+        let long_ok =
+            long_res.as_ref().ok().and_then(|r| r.first()).is_some_and(|r| r.success);
+
         if let Err(e) = &short_res {
             tracing::error!(exchange = %short_ex, error = %e, "Short leg placement failed");
+        } else if !short_ok {
+            let err = short_res.unwrap().into_iter().next().and_then(|r| r.error).unwrap_or_default();
+            tracing::error!(exchange = %short_ex, error = %err, "Short leg order rejected");
         }
         if let Err(e) = &long_res {
             tracing::error!(exchange = %long_ex, error = %e, "Long leg placement failed");
+        } else if !long_ok {
+            let err = long_res.unwrap().into_iter().next().and_then(|r| r.error).unwrap_or_default();
+            tracing::error!(exchange = %long_ex, error = %err, "Long leg order rejected");
+        }
+
+        if !short_ok || !long_ok {
+            // At least one leg didn't land. Cancel any orders that may have
+            // been accepted on either venue to avoid leaving an unhedged leg.
+            let _ = cx.broker(&short_ex)?.cancel_all_orders(self.symbol()).await;
+            let _ = cx.broker(&long_ex)?.cancel_all_orders(self.symbol()).await;
+            tracing::warn!("Entry incomplete — cancelling all orders on both venues, returning to Flat");
+            self.state.go_flat();
         }
         Ok(())
     }
@@ -189,11 +209,8 @@ impl FundingArbActor {
             if pos.is_zero() {
                 continue;
             }
-            let (close_side, qty) = if pos.is_sign_positive() {
-                (Side::Sell, pos)
-            } else {
-                (Side::Buy, -pos)
-            };
+            let (close_side, qty) =
+                if pos.is_sign_positive() { (Side::Sell, pos) } else { (Side::Buy, -pos) };
             let order = self.make_order(&leg.exchange, close_side, qty, true);
             let broker = cx.broker(&leg.exchange)?;
             if let Err(e) = broker.place_orders(&[order]).await {
@@ -206,6 +223,7 @@ impl FundingArbActor {
     async fn emergency_flatten(&mut self, cx: &ActorContext, reason: &str) -> Result<(), BotError> {
         tracing::warn!(reason, "Emergency flatten");
         let exchanges = [self.config.exchange_a.clone(), self.config.exchange_b.clone()];
+        let mut all_ok = true;
         for ex in &exchanges {
             let broker = cx.broker(ex)?;
             let _ = broker.cancel_all_orders(self.symbol()).await;
@@ -213,15 +231,34 @@ impl FundingArbActor {
             if pos.is_zero() {
                 continue;
             }
-            let (close_side, qty) = if pos.is_sign_positive() {
-                (Side::Sell, pos)
-            } else {
-                (Side::Buy, -pos)
-            };
+            let (close_side, qty) =
+                if pos.is_sign_positive() { (Side::Sell, pos) } else { (Side::Buy, -pos) };
             let mut order = self.make_order(ex, close_side, qty, true);
             order.order_type = OrderType::Market; // force IoC regardless of config
-            let _ = broker.place_orders(&[order]).await;
+            match broker.place_orders(&[order]).await {
+                Ok(results) if results.first().is_some_and(|r| r.success) => {}
+                Ok(results) => {
+                    let err = results
+                        .first()
+                        .and_then(|r| r.error.as_deref())
+                        .unwrap_or("order rejected");
+                    tracing::error!(exchange = %ex, error = %err, "Emergency flatten order rejected — MANUAL INTERVENTION REQUIRED");
+                    all_ok = false;
+                }
+                Err(e) => {
+                    tracing::error!(exchange = %ex, error = %e, "Emergency flatten order failed — MANUAL INTERVENTION REQUIRED");
+                    all_ok = false;
+                }
+            }
         }
+        if !all_ok {
+            // Flatten order didn't land. Request shutdown so the operator
+            // can see the incomplete flatten in the harness exit log and
+            // close the position manually.
+            cx.request_shutdown();
+        }
+        // Transition state to Flat regardless — staying in Entering/Exiting
+        // would cause more entry attempts on top of an open position.
         self.state.go_flat();
         Ok(())
     }
@@ -249,6 +286,9 @@ impl FundingArbActor {
 #[async_trait]
 impl Actor for FundingArbActor {
     async fn init(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        self.config
+            .validate()
+            .map_err(|e| BotError::config(format!("funding-arb config invalid: {e}")))?;
         tracing::info!(
             exchange_a = %self.config.exchange_a,
             exchange_b = %self.config.exchange_b,
@@ -321,19 +361,21 @@ impl EventHandler<MarkPriceUpdate> for FundingArbActor {
             // update carried no funding data (e.g. HL AllMids), not zero rate.
             if let Some(rate) = event.funding_rate {
                 self.state.rate_a = rate;
+                self.state.has_rate_a = true;
             }
         } else if event.exchange == self.config.exchange_b {
             self.state.mark_b = event.mark_price;
             if let Some(rate) = event.funding_rate {
                 self.state.rate_b = rate;
+                self.state.has_rate_b = true;
             }
         } else {
             return Ok(());
         }
 
-        // Entry trigger: only when flat, both marks valid, rates sane, spread
-        // wide, and we've been flat at least `min_flat_hold_secs`. The hold
-        // window guards against spread wobble and post-flatten re-entry.
+        // Entry trigger: only when flat, both marks valid, both venues have
+        // reported at least one real funding rate (not just the default zero),
+        // rates are sane, spread is wide, and the flat-hold window has elapsed.
         let hold_elapsed = self
             .state
             .phase_entered_at
@@ -342,6 +384,8 @@ impl EventHandler<MarkPriceUpdate> for FundingArbActor {
 
         if self.state.phase == ArbPhase::Flat
             && hold_elapsed
+            && self.state.has_rate_a
+            && self.state.has_rate_b
             && self.state.abs_rate_spread() > self.config.entry_threshold
             && self.rates_sane()
             && !self.state.mark_a.is_zero()
@@ -361,10 +405,8 @@ impl EventHandler<Trade> for FundingArbActor {
         }
         // Same wallet may carry orders from other strategies / manual placements.
         // Only fold fills back into our inventory if we own the client_id.
-        let is_ours = event
-            .client_id
-            .as_deref()
-            .is_some_and(|cid| self.my_client_ids.contains(cid));
+        let is_ours =
+            event.client_id.as_deref().is_some_and(|cid| self.my_client_ids.contains(cid));
         if !is_ours {
             tracing::debug!(
                 exchange = %event.exchange,
@@ -454,7 +496,9 @@ impl EventHandler<Tick> for FundingArbActor {
                         }
                     }
                 }
-                Err(e) => tracing::warn!(exchange = %ex, error = %e, "reconcile get_positions failed"),
+                Err(e) => {
+                    tracing::warn!(exchange = %ex, error = %e, "reconcile get_positions failed")
+                }
             }
         }
         match self.state.phase {
@@ -499,10 +543,7 @@ impl EventHandler<Tick> for FundingArbActor {
                 }
                 if self.both_legs_flat() {
                     self.state.cycles_completed += 1;
-                    tracing::info!(
-                        cycles = self.state.cycles_completed,
-                        "Arb cycle completed"
-                    );
+                    tracing::info!(cycles = self.state.cycles_completed, "Arb cycle completed");
                     self.state.go_flat();
                 }
             }
@@ -584,7 +625,92 @@ mod tests {
         }
     }
 
-    /// Full `Flat → Entering → Active → Exiting → Flat` cycle driven by
+    // -------------------------------------------------------------------------
+    // Zero-rate guard: no entry until both venues have reported a real rate
+    // -------------------------------------------------------------------------
+
+    /// Exchange B sends a mark price but no funding rate. Entry must be blocked
+    /// even when the spread between the default zero and a real rate looks wide.
+    #[tokio::test(flavor = "current_thread")]
+    async fn no_entry_until_both_rates_received() {
+        let bullet = MockBroker::shared("bullet");
+        let hl = MockBroker::shared("hl");
+
+        // rate_a = 0.002, but exchange B only sends mark_price (no funding rate).
+        // has_rate_b stays false → entry guard must block.
+        let marks = ScriptedFeed::new(vec![
+            mark("bullet", "100", Some("0.002")), // has_rate_a = true
+            MarkPriceUpdate {
+                exchange: "hl".into(),
+                symbol: "BTC-PERP".into(),
+                mark_price: d("100"),
+                funding_rate: None, // has_rate_b stays false
+            },
+        ]);
+        let actor = FundingArbActor::with_client_ids(test_config(), ClientIdIssuer::new());
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", bullet.clone() as Arc<dyn bb_core::broker::Broker>)
+            .wire_broker("hl", hl.clone() as Arc<dyn bb_core::broker::Broker>)
+            .wire_feed_named("marks", marks)
+            .wire_actor(
+                ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>(),
+            )
+            .build()
+            .unwrap();
+        harness.run().await.unwrap();
+        assert_eq!(bullet.placed_count().await, 0, "should not enter without both rates");
+        assert_eq!(hl.placed_count().await, 0, "should not enter without both rates");
+    }
+
+    // -------------------------------------------------------------------------
+    // enter() failure: both brokers reject → state goes back to Flat
+    // -------------------------------------------------------------------------
+
+    /// When entry order placements fail, the actor must cancel any potentially
+    /// placed orders and return to Flat — not stay stuck in Entering.
+    #[tokio::test(flavor = "current_thread")]
+    async fn enter_failure_returns_to_flat_and_cancels() {
+        let bullet = MockBroker::shared("bullet");
+        let hl = MockBroker::shared("hl");
+
+        // Reject both legs.
+        bullet
+            .queue_place_response(Err(BotError::exchange("venue error", false)))
+            .await;
+        hl.queue_place_response(Err(BotError::exchange("venue error", false))).await;
+
+        // Wide spread triggers entry on the second mark event.
+        let marks = ScriptedFeed::new(vec![
+            mark("bullet", "100", Some("0.002")),
+            mark("hl", "100", Some("0.0005")), // spread = 0.0015 > 0.001 → entry
+        ]);
+
+        let actor = FundingArbActor::with_client_ids(test_config(), ClientIdIssuer::new());
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", bullet.clone() as Arc<dyn bb_core::broker::Broker>)
+            .wire_broker("hl", hl.clone() as Arc<dyn bb_core::broker::Broker>)
+            .wire_feed_named("marks", marks)
+            .wire_actor(
+                ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>(),
+            )
+            .build()
+            .unwrap();
+        harness.run().await.unwrap();
+
+        // Entry was attempted (place_orders called), then failed.
+        assert_eq!(bullet.placed_count().await, 1, "one entry attempt");
+        // After the failure, cancel_all_orders should have been called on both
+        // venues to clean up any orders that might have landed on one side.
+        let bullet_hist = bullet.history().await;
+        let hl_hist = hl.history().await;
+        let bullet_cancels = bullet_hist.iter().filter(|c| c.method == "cancel_all_orders").count();
+        let hl_cancels = hl_hist.iter().filter(|c| c.method == "cancel_all_orders").count();
+        assert!(bullet_cancels >= 1, "cancel_all_orders should be called on bullet after failure");
+        assert!(hl_cancels >= 1, "cancel_all_orders should be called on hl after failure");
+    }
+
+    // -------------------------------------------------------------------------
+    // Full `Flat → Entering → Active → Exiting → Flat` cycle driven by
     /// `ScriptedFeed`s and `MockBroker`.
     ///
     /// Three parallel feeds run in interleaved fashion (current_thread +
@@ -609,26 +735,27 @@ mod tests {
 
         // rate_a > rate_b → bullet is the short leg (cid="1"), hl is the long leg (cid="2")
         let marks = ScriptedFeed::new(vec![
-            mark("bullet", "100", Some("0.002")),    // [0] rate_a wide
-            mark("hl",     "100", Some("0.0005")),   // [1] rate_b wide → ENTRY
-            mark("bullet", "100", Some("0.00005")),  // [2] narrow rate_a
-            mark("hl",     "100", Some("0.00003")),  // [3] narrow rate_b (spread 0.00002 < 0.0001)
-            mark("bullet", "100", Some("0.00005")),  // [4] padding
-            mark("hl",     "100", Some("0.00003")),  // [5] padding
-            mark("bullet", "100", Some("0.00005")),  // [6] padding
-            mark("hl",     "100", Some("0.00003")),  // [7] padding
-            mark("bullet", "100", Some("0.00005")),  // [8] padding
+            mark("bullet", "100", Some("0.002")),   // [0] rate_a wide
+            mark("hl", "100", Some("0.0005")),      // [1] rate_b wide → ENTRY
+            mark("bullet", "100", Some("0.00005")), // [2] narrow rate_a
+            mark("hl", "100", Some("0.00003")),     // [3] narrow rate_b (spread 0.00002 < 0.0001)
+            mark("bullet", "100", Some("0.00005")), // [4] padding
+            mark("hl", "100", Some("0.00003")),     // [5] padding
+            mark("bullet", "100", Some("0.00005")), // [6] padding
+            mark("hl", "100", Some("0.00003")),     // [7] padding
+            mark("bullet", "100", Some("0.00005")), // [8] padding
         ]);
         let trades = ScriptedFeed::new(vec![
-            foreign_trade(),              // [0] skip
-            foreign_trade(),              // [1] skip (entry fires in this round — fills not yet)
-            foreign_trade(),              // [2] skip
+            foreign_trade(),                 // [0] skip
+            foreign_trade(),                 /* [1] skip (entry fires in this round — fills not
+                                              * yet) */
+            foreign_trade(),                 // [2] skip
             fill("bullet", Side::Sell, "1"), // [3] short leg filled (cid="1" guaranteed in my_ids)
-            fill("hl",     Side::Buy,  "2"), // [4] long leg filled
-            foreign_trade(),              // [5] skip
-            fill("bullet", Side::Buy,  "3"), // [6] close short (cid="3" issued by exit in round 5)
-            fill("hl",     Side::Sell, "4"), // [7] close long
-            foreign_trade(),              // [8] skip
+            fill("hl", Side::Buy, "2"),      // [4] long leg filled
+            foreign_trade(),                 // [5] skip
+            fill("bullet", Side::Buy, "3"),  // [6] close short (cid="3" issued by exit in round 5)
+            fill("hl", Side::Sell, "4"),     // [7] close long
+            foreign_trade(),                 // [8] skip
         ]);
         let ticks = ScriptedFeed::new(vec![
             Tick::now(), // [0] Flat, no-op

@@ -1,37 +1,35 @@
 //! Avellaneda-Stoikov market maker as an event-driven actor.
 //!
 //! Two modes, selected by config:
-//!   - **Single-venue (default)**: `s` in the A-S formula comes from the
-//!     trading venue's BookUpdate mid. Faithful to the paper.
-//!   - **Fair-value MM**: when `reference_exchange` is set, `s` comes from
-//!     `ReferencePriceUpdate` (e.g. Binance). The local book is still used
-//!     for inventory tracking and would-cross checks but no longer drives
-//!     `last_mid` or the volatility estimator. The textbook A-S inventory
-//!     skew (`r = s − q·γ·σ²·τ`) is unchanged — only the source of `s`.
+//!   - **Single-venue (default)**: `s` in the A-S formula comes from the trading venue's BookUpdate
+//!     mid. Faithful to the paper.
+//!   - **Fair-value MM**: when `reference_exchange` is set, `s` comes from `ReferencePriceUpdate`
+//!     (e.g. Binance). The local book is still used for inventory tracking and would-cross checks
+//!     but no longer drives `last_mid` or the volatility estimator. The textbook A-S inventory skew
+//!     (`r = s − q·γ·σ²·τ`) is unchanged — only the source of `s`.
 //!
 //! Subscribed events:
-//!   - `BookUpdate` — local book; drives `last_mid`/volatility only when no
-//!     reference is configured. Always triggers a refresh attempt so we can
-//!     react to inventory-cap toggles even without a reference.
-//!   - `ReferencePriceUpdate` — when a reference is configured, this is
-//!     the canonical source of `s` and the volatility estimator's input.
-//!   - `Trade` — canonical source of inventory / realized PnL. Nulls
-//!     `last_quote_at` so the next tick re-builds the ladder around the new
-//!     reservation price.
-//!   - `OrderLifecycle` — purely observational; logged for debugging. Not
-//!     used for position updates (that's the canonical-source invariant).
-//!   - `Tick` — fallback refresh when `order_refresh_secs` elapses, so we
-//!     still re-quote in calm markets where book updates are sparse.
+//!   - `BookUpdate` — local book; drives `last_mid`/volatility only when no reference is
+//!     configured. Always triggers a refresh attempt so we can react to inventory-cap toggles even
+//!     without a reference.
+//!   - `ReferencePriceUpdate` — when a reference is configured, this is the canonical source of `s`
+//!     and the volatility estimator's input.
+//!   - `Trade` — canonical source of inventory / realized PnL. Nulls `last_quote_at` so the next
+//!     tick re-builds the ladder around the new reservation price.
+//!   - `OrderLifecycle` — purely observational; logged for debugging. Not used for position updates
+//!     (that's the canonical-source invariant).
+//!   - `Tick` — fallback refresh when `order_refresh_secs` elapses, so we still re-quote in calm
+//!     markets where book updates are sparse.
 
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
-use bb_exchange_binance::ReferencePriceUpdate;
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
 use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
-use bb_core::types::{AmendOrder, CancelOrder, NewOrder, OrderBook, OrderStatus, Side};
+use bb_core::types::{AmendOrder, CancelOrder, NewOrder, OrderBook, OrderStatus, OrderType, Side};
+use bb_exchange_binance::ReferencePriceUpdate;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use serde::Serialize;
@@ -49,6 +47,16 @@ struct QuoteSlot {
     client_id: Option<String>,
     order_id: Option<String>,
     placed_at: Option<std::time::SystemTime>,
+}
+
+struct ReconcileResult {
+    kept_slots: Vec<QuoteSlot>,
+    to_amend: Vec<AmendOrder>,
+    amend_intents: Vec<(usize, Side, usize, Decimal, Decimal, String)>,
+    to_place: Vec<NewOrder>,
+    place_intents: Vec<(Side, usize, Decimal, Decimal, String)>,
+    to_cancel: Vec<CancelOrder>,
+    cancel_slot_indices: Vec<usize>,
 }
 
 pub struct AvellanedaStoikovActor {
@@ -92,8 +100,7 @@ impl AvellanedaStoikovActor {
         match self.reference_last_seen {
             None => true,
             Some(t) => {
-                now.duration_since(t)
-                    > Duration::from_secs(self.config.reference_stale_secs.max(1))
+                now.duration_since(t) > Duration::from_secs(self.config.reference_stale_secs.max(1))
             }
         }
     }
@@ -181,21 +188,150 @@ impl AvellanedaStoikovActor {
         self.config.order_size * (Decimal::ONE + step * Decimal::from(level as u64))
     }
 
+    /// Diff `intents` against `self.slots` and compute the minimal set of
+    /// API operations needed (amend, place, cancel) without executing them.
+    fn reconcile_orders(
+        &mut self,
+        intents: &[(Side, usize, Decimal, Decimal)],
+        mid: Decimal,
+        symbol: &str,
+        order_type: OrderType,
+        post_only: bool,
+    ) -> ReconcileResult {
+        let mut matched = vec![false; self.slots.len()];
+        let mut kept_slots: Vec<QuoteSlot> = Vec::new();
+        let mut to_amend: Vec<AmendOrder> = Vec::new();
+        let mut amend_intents: Vec<(usize, Side, usize, Decimal, Decimal, String)> = Vec::new();
+        let mut to_place: Vec<NewOrder> = Vec::new();
+        let mut place_intents: Vec<(Side, usize, Decimal, Decimal, String)> = Vec::new();
+
+        for (side, level, price, size) in intents {
+            let level_bps = self.config.amend_threshold_bps
+                + self.config.amend_threshold_step_bps * Decimal::from(*level as u64);
+            let threshold = mid * level_bps / Decimal::from(10_000);
+
+            if post_only && self.book.as_ref().is_some_and(|b| b.would_cross(*side, *price)) {
+                tracing::debug!(side = %side, level, price = %price, "skipping would-cross rung");
+                if let Some(idx) = self
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .find(|(i, s)| !matched[*i] && s.side == *side && s.level == *level)
+                    .map(|(i, _)| i)
+                {
+                    let existing_also_crosses = self
+                        .book
+                        .as_ref()
+                        .is_some_and(|b| b.would_cross(*side, self.slots[idx].price));
+                    if existing_also_crosses {
+                        // Leave matched[idx] = false so the cancel sweep at the
+                        // end of this function picks it up and removes the
+                        // stale resting order from the venue.
+                        tracing::debug!(
+                            side = %side,
+                            level,
+                            "existing slot also crosses book — queuing cancel"
+                        );
+                    } else {
+                        matched[idx] = true;
+                        kept_slots.push(self.slots[idx].clone());
+                    }
+                }
+                continue;
+            }
+
+            let existing = self
+                .slots
+                .iter()
+                .enumerate()
+                .find(|(i, s)| !matched[*i] && s.side == *side && s.level == *level)
+                .map(|(i, _)| i);
+
+            match existing {
+                Some(idx) => {
+                    matched[idx] = true;
+                    let slot = &self.slots[idx];
+                    if (slot.price - *price).abs() < threshold {
+                        kept_slots.push(slot.clone());
+                        continue;
+                    }
+                    if slot.order_id.is_none() && slot.client_id.is_none() {
+                        kept_slots.push(slot.clone());
+                        continue;
+                    }
+                    let new_cid = self.client_ids.issue();
+                    to_amend.push(AmendOrder {
+                        cancel: CancelOrder {
+                            symbol: symbol.to_string(),
+                            order_id: slot.order_id.clone().unwrap_or_default(),
+                            client_id: slot.client_id.clone(),
+                        },
+                        new_order: NewOrder {
+                            symbol: symbol.to_string(),
+                            side: *side,
+                            order_type,
+                            price: *price,
+                            quantity: *size,
+                            client_id: Some(new_cid.clone()),
+                            reduce_only: false,
+                        },
+                    });
+                    amend_intents.push((idx, *side, *level, *price, *size, new_cid));
+                }
+                None => {
+                    let new_cid = self.client_ids.issue();
+                    to_place.push(NewOrder {
+                        symbol: symbol.to_string(),
+                        side: *side,
+                        order_type,
+                        price: *price,
+                        quantity: *size,
+                        client_id: Some(new_cid.clone()),
+                        reduce_only: false,
+                    });
+                    place_intents.push((*side, *level, *price, *size, new_cid));
+                }
+            }
+        }
+
+        let mut to_cancel: Vec<CancelOrder> = Vec::new();
+        let mut cancel_slot_indices: Vec<usize> = Vec::new();
+        for (i, slot) in self.slots.iter().enumerate() {
+            if matched[i] {
+                continue;
+            }
+            if slot.order_id.is_none() && slot.client_id.is_none() {
+                continue;
+            }
+            to_cancel.push(CancelOrder {
+                symbol: symbol.to_string(),
+                order_id: slot.order_id.clone().unwrap_or_default(),
+                client_id: slot.client_id.clone(),
+            });
+            cancel_slot_indices.push(i);
+        }
+
+        ReconcileResult {
+            kept_slots,
+            to_amend,
+            amend_intents,
+            to_place,
+            place_intents,
+            to_cancel,
+            cancel_slot_indices,
+        }
+    }
+
     /// Diff the desired ladder against `self.slots` and reconcile via the
     /// minimal set of API calls:
-    /// - slots whose target price is within `amend_threshold_bps` are kept
-    ///   in place (no round-trip),
+    /// - slots whose target price is within `amend_threshold_bps` are kept in place (no
+    ///   round-trip),
     /// - slots whose target moved are batch-amended atomically,
     /// - missing rungs are placed,
-    /// - unmatched slots (e.g. when inventory caps disable a side) are
-    ///   cancelled.
+    /// - unmatched slots (e.g. when inventory caps disable a side) are cancelled.
     /// The function is cheap when nothing has moved, so it's safe to call
     /// from `BookUpdate` for sub-second responsiveness.
-    async fn refresh_quotes(
-        &mut self,
-        cx: &ActorContext,
-        mid: Decimal,
-    ) -> Result<(), BotError> {
+    async fn refresh_quotes(&mut self, cx: &ActorContext, mid: Decimal) -> Result<(), BotError> {
         // Throttle: when ref feeds fire faster than Bullet REST can settle,
         // keep the actor draining its input channel by skipping refreshes
         // that arrive within the cooldown window. The next event after the
@@ -249,123 +385,15 @@ impl AvellanedaStoikovActor {
         // is using PostOnly — Limit/Market are allowed to cross.
         let post_only = matches!(order_type, bb_core::types::OrderType::PostOnly);
 
-        // Reconciliation buckets.
-        let mut matched = vec![false; self.slots.len()];
-        let mut kept_slots: Vec<QuoteSlot> = Vec::new();
-        let mut to_amend: Vec<AmendOrder> = Vec::new();
-        let mut amend_intents: Vec<(usize, Side, usize, Decimal, Decimal, String)> = Vec::new();
-        let mut to_place: Vec<NewOrder> = Vec::new();
-        let mut place_intents: Vec<(Side, usize, Decimal, Decimal, String)> = Vec::new();
-
-        for (side, level, price, size) in &intents {
-            // Per-level threshold: outer rungs widen by `step × level` so we
-            // don't burn round-trips chasing fair value on rungs that rarely
-            // fill.
-            let level_bps = self.config.amend_threshold_bps
-                + self.config.amend_threshold_step_bps * Decimal::from(*level as u64);
-            let threshold = mid * level_bps / Decimal::from(10_000);
-
-            // Skip rungs that would cross the local book — PostOnly would
-            // reject and revert the whole batch.
-            if post_only
-                && self
-                    .book
-                    .as_ref()
-                    .is_some_and(|b| b.would_cross(*side, *price))
-            {
-                tracing::debug!(side = %side, level, price = %price, "skipping would-cross rung");
-                // If we already have a slot at this (side, level), preserve
-                // it untouched — the venue will keep our existing quote.
-                if let Some(idx) = self
-                    .slots
-                    .iter()
-                    .enumerate()
-                    .find(|(i, s)| !matched[*i] && s.side == *side && s.level == *level)
-                    .map(|(i, _)| i)
-                {
-                    matched[idx] = true;
-                    kept_slots.push(self.slots[idx].clone());
-                }
-                continue;
-            }
-
-            let existing = self
-                .slots
-                .iter()
-                .enumerate()
-                .find(|(i, s)| !matched[*i] && s.side == *side && s.level == *level)
-                .map(|(i, _)| i);
-
-            match existing {
-                Some(idx) => {
-                    matched[idx] = true;
-                    let slot = &self.slots[idx];
-                    if (slot.price - *price).abs() < threshold {
-                        kept_slots.push(slot.clone());
-                        continue;
-                    }
-                    // Need an identifier to amend; if neither is set yet
-                    // (place ack hasn't landed), keep the slot — we'll catch
-                    // it on the next refresh once OrderLifecycle fires.
-                    if slot.order_id.is_none() && slot.client_id.is_none() {
-                        kept_slots.push(slot.clone());
-                        continue;
-                    }
-                    let new_cid = self.client_ids.issue();
-                    to_amend.push(AmendOrder {
-                        cancel: CancelOrder {
-                            symbol: symbol.clone(),
-                            order_id: slot.order_id.clone().unwrap_or_default(),
-                            client_id: slot.client_id.clone(),
-                        },
-                        new_order: NewOrder {
-                            symbol: symbol.clone(),
-                            side: *side,
-                            order_type,
-                            price: *price,
-                            quantity: *size,
-                            client_id: Some(new_cid.clone()),
-                            reduce_only: false,
-                        },
-                    });
-                    amend_intents.push((idx, *side, *level, *price, *size, new_cid));
-                }
-                None => {
-                    let new_cid = self.client_ids.issue();
-                    to_place.push(NewOrder {
-                        symbol: symbol.clone(),
-                        side: *side,
-                        order_type,
-                        price: *price,
-                        quantity: *size,
-                        client_id: Some(new_cid.clone()),
-                        reduce_only: false,
-                    });
-                    place_intents.push((*side, *level, *price, *size, new_cid));
-                }
-            }
-        }
-
-        // Unmatched slots → cancel (e.g. inventory cap disabled this side).
-        // Track slot indices so we can re-track any slot whose cancel ends
-        // up reverting — otherwise we silently lose tracking of a still-live
-        // order on Bullet, leaking it as an orphan.
-        let mut to_cancel: Vec<CancelOrder> = Vec::new();
-        let mut cancel_slot_indices: Vec<usize> = Vec::new();
-        for (i, slot) in self.slots.iter().enumerate() {
-            if matched[i] {
-                continue;
-            }
-            if slot.order_id.is_none() && slot.client_id.is_none() {
-                continue;
-            }
-            to_cancel.push(CancelOrder {
-                symbol: symbol.clone(),
-                order_id: slot.order_id.clone().unwrap_or_default(),
-                client_id: slot.client_id.clone(),
-            });
-            cancel_slot_indices.push(i);
-        }
+        let ReconcileResult {
+            mut kept_slots,
+            to_amend,
+            amend_intents,
+            to_place,
+            place_intents,
+            to_cancel,
+            cancel_slot_indices,
+        } = self.reconcile_orders(&intents, mid, &symbol, order_type, post_only);
 
         let n_cancels = to_cancel.len();
         let n_amends = to_amend.len();
@@ -462,10 +490,10 @@ impl AvellanedaStoikovActor {
         // amend edge cases or place-tx-committed-but-response-errored).
         //
         // Both directions:
-        //   - Phantom: slot in `kept_slots` whose `order_id` isn't in the
-        //     live list → drop the slot. Next refresh re-places it.
-        //   - Orphan: live order on Bullet not matching any tracked slot's
-        //     `order_id` or `client_id` → cancel it.
+        //   - Phantom: slot in `kept_slots` whose `order_id` isn't in the live list → drop the
+        //     slot. Next refresh re-places it.
+        //   - Orphan: live order on Bullet not matching any tracked slot's `order_id` or
+        //     `client_id` → cancel it.
         //
         // Slots whose `order_id` is None (place ack pending) are matched by
         // `client_id` instead, so we don't drop legitimate in-flight slots.
@@ -493,17 +521,14 @@ impl AvellanedaStoikovActor {
             match broker.get_open_orders(self.symbol()).await {
                 Ok(open) => {
                     use std::collections::HashSet;
-                    let live_oids: HashSet<&str> =
-                        open.iter().map(|o| o.id.as_str()).collect();
+                    let live_oids: HashSet<&str> = open.iter().map(|o| o.id.as_str()).collect();
                     let live_cids: HashSet<&str> =
                         open.iter().filter_map(|o| o.client_id.as_deref()).collect();
                     let before = kept_slots.len();
                     kept_slots.retain(|s| match s.order_id.as_deref() {
                         Some(oid) => {
                             live_oids.contains(oid)
-                                || s.client_id
-                                    .as_deref()
-                                    .is_some_and(|c| live_cids.contains(c))
+                                || s.client_id.as_deref().is_some_and(|c| live_cids.contains(c))
                         }
                         None => true,
                     });
@@ -513,22 +538,16 @@ impl AvellanedaStoikovActor {
                     // match in either direction (oid OR cid) so a slot whose
                     // place ack hasn't landed (cid only) still claims its
                     // order.
-                    let tracked_oids: HashSet<&str> = kept_slots
-                        .iter()
-                        .filter_map(|s| s.order_id.as_deref())
-                        .collect();
-                    let tracked_cids: HashSet<&str> = kept_slots
-                        .iter()
-                        .filter_map(|s| s.client_id.as_deref())
-                        .collect();
+                    let tracked_oids: HashSet<&str> =
+                        kept_slots.iter().filter_map(|s| s.order_id.as_deref()).collect();
+                    let tracked_cids: HashSet<&str> =
+                        kept_slots.iter().filter_map(|s| s.client_id.as_deref()).collect();
                     let orphans: Vec<CancelOrder> = open
                         .iter()
                         .filter(|o| {
                             let oid_tracked = tracked_oids.contains(o.id.as_str());
-                            let cid_tracked = o
-                                .client_id
-                                .as_deref()
-                                .is_some_and(|c| tracked_cids.contains(c));
+                            let cid_tracked =
+                                o.client_id.as_deref().is_some_and(|c| tracked_cids.contains(c));
                             !oid_tracked && !cid_tracked
                         })
                         .map(|o| CancelOrder {
@@ -542,19 +561,12 @@ impl AvellanedaStoikovActor {
                         .iter()
                         .filter(|o| {
                             let oid_tracked = tracked_oids.contains(o.id.as_str());
-                            let cid_tracked = o
-                                .client_id
-                                .as_deref()
-                                .is_some_and(|c| tracked_cids.contains(c));
+                            let cid_tracked =
+                                o.client_id.as_deref().is_some_and(|c| tracked_cids.contains(c));
                             !oid_tracked && !cid_tracked
                         })
                         .map(|o| {
-                            format!(
-                                "{}@{}/{}",
-                                o.id,
-                                o.client_id.as_deref().unwrap_or("-"),
-                                o.side
-                            )
+                            format!("{}@{}/{}", o.id, o.client_id.as_deref().unwrap_or("-"), o.side)
                         })
                         .collect();
                     let mut orphans_actually_cancelled = 0usize;
@@ -622,6 +634,15 @@ impl Actor for AvellanedaStoikovActor {
         self.check_fee_floor()?;
         let broker = cx.broker(self.exchange())?;
         broker.cancel_all_orders(self.symbol()).await?;
+        let positions = broker.get_positions().await?;
+        if let Some(position) = positions.iter().find(|p| p.symbol == self.symbol()) {
+            self.inventory.seed_from_position(position);
+            tracing::warn!(
+                net_pos = %self.inventory.net_position,
+                entry = %self.inventory.avg_entry_price,
+                "Seeded A-S inventory from existing venue position"
+            );
+        }
         let book = broker.get_orderbook(self.symbol(), 20).await?;
         // Seed local book unconditionally; seed mid/vol only in single-venue
         // mode (in fair-value mode the reference feed owns those).
@@ -753,10 +774,8 @@ impl EventHandler<Trade> for AvellanedaStoikovActor {
         let event_cid = event.client_id.as_deref();
         let event_oid = Some(event.order_id.as_str()).filter(|s| !s.is_empty());
         self.slots.retain(|slot| {
-            let cid_match =
-                event_cid.is_some() && slot.client_id.as_deref() == event_cid;
-            let oid_match =
-                event_oid.is_some() && slot.order_id.as_deref() == event_oid;
+            let cid_match = event_cid.is_some() && slot.client_id.as_deref() == event_cid;
+            let oid_match = event_oid.is_some() && slot.order_id.as_deref() == event_oid;
             !(cid_match || oid_match)
         });
         // Force a re-quote on the next tick so both sides follow the new
