@@ -21,14 +21,20 @@ use crate::types::{
 pub trait Broker: Send + Sync + 'static {
     fn name(&self) -> &str;
 
+    // -- Connection health ----------------------------------------------------
+    //
+    // Both methods below have default implementations that return `false`. A
+    // broker backed by a simple REST client with no reconnect loop can leave
+    // these as-is. Adapters that own a long-lived WebSocket (e.g. Bullet,
+    // Hyperliquid) override them to surface reconnect + permanent-disconnect
+    // signals without the strategy having to poll the WS directly.
+
     /// Drains any "user-data WebSocket reconnected" signal that the broker's
     /// connection layer has observed since the previous call. Strategies
     /// consume this in their refresh loop to force an immediate REST
     /// reconciliation: any state changes during the disconnect window
     /// (fills, cancels) are otherwise invisible until the next periodic
     /// reconcile fires.
-    ///
-    /// Default: always `false` (broker has no reconnect notion).
     fn take_reconcile_signal(&self) -> bool {
         false
     }
@@ -36,16 +42,29 @@ pub trait Broker: Send + Sync + 'static {
     /// Reports whether the broker's connection has been permanently lost.
     /// Strategies should call `ActorContext::request_shutdown()` so the
     /// harness winds down cleanly rather than running blind.
-    ///
-    /// Default: always `false`.
     fn is_disconnected(&self) -> bool {
         false
     }
+
+    // -- Market data ----------------------------------------------------------
 
     async fn get_orderbook(&self, symbol: &str, depth: usize) -> Result<OrderBook, BotError>;
     async fn get_balances(&self) -> Result<Vec<Balance>, BotError>;
     async fn get_positions(&self) -> Result<Vec<Position>, BotError>;
     async fn get_open_orders(&self, symbol: &str) -> Result<Vec<Order>, BotError>;
+
+    // -- Order management -----------------------------------------------------
+    //
+    // Error semantics:
+    //   - `Err(BotError)` on the outer `Result` means a transport/system
+    //     failure — the whole call failed before any order reached the venue.
+    //   - `Ok(results)` with `OrderResult.success = false` means the venue
+    //     rejected a specific order (bad price, insufficient margin, etc.).
+    //     Other orders in the batch may have succeeded.
+    //
+    // `OrderResult.order_id` is `Some(id)` when the venue confirms the order
+    // synchronously. `None` means outcome unknown — listen on the lifecycle
+    // stream (`OrderLifecycle`) for confirmation.
 
     async fn place_orders(&self, orders: &[NewOrder]) -> Result<Vec<OrderResult>, BotError>;
     async fn cancel_orders(
@@ -54,9 +73,12 @@ pub trait Broker: Send + Sync + 'static {
     ) -> Result<Vec<CancelResult>, BotError>;
     async fn cancel_all_orders(&self, symbol: &str) -> Result<(), BotError>;
 
-    /// Amend live quotes atomically. Each entry pairs a cancel with a new
-    /// placement. Brokers that support a native amend endpoint override this;
-    /// others fall back to sequential cancel-then-place.
+    /// Amend live quotes. Each entry pairs a cancel with a new placement.
+    ///
+    /// Brokers that support a native atomic amend endpoint (e.g. Bullet)
+    /// override this. The default fallback is sequential cancel-then-place:
+    /// partial failure leaves you flat on the cancelled side, so override
+    /// for venues where atomicity matters.
     async fn amend_orders(&self, amends: &[AmendOrder]) -> Result<Vec<OrderResult>, BotError> {
         if amends.is_empty() {
             return Ok(vec![]);

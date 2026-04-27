@@ -16,8 +16,7 @@ status_port = 3032
 [exchanges.bullet]
 type = "bullet"
 network = "testnet"
-# Set via: export BB_BULLET_PRIVATE_KEY_HEX="0x..." or BB_BULLET_KEY_FILE=/path
-private_key_hex = ""
+# Set via: export BB_BULLET_PRIVATE_KEY_HEX="0x..." or BB_BULLET_KEY_FILE=/path/to/key.json
 
 [strategy]
 type = "reference-arb"

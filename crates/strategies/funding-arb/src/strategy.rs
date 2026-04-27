@@ -262,6 +262,9 @@ impl Actor for FundingArbActor {
         _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
+        // WindDownReason intentionally ignored: position-or-not is the right
+        // discriminant here. If we hold a hedge, emergency_flatten is correct
+        // regardless of why we're shutting down.
         if self.state.phase != ArbPhase::Flat {
             let _ = self.emergency_flatten(cx, "shutdown").await;
         } else {

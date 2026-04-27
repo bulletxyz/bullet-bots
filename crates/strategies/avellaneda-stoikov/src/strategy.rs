@@ -652,6 +652,9 @@ impl Actor for AvellanedaStoikovActor {
         _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
+        // WindDownReason intentionally ignored: market-making never wants to
+        // take taker fees at shutdown, so cancel-only is correct for every
+        // reason including FeedFailed.
         let broker = cx.broker(self.exchange())?;
         tracing::info!("Shutting down A-S actor — cancelling all orders");
         let _ = broker.cancel_all_orders(self.symbol()).await;

@@ -315,6 +315,8 @@ impl Actor for GridActor {
         _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
+        // WindDownReason is intentionally ignored: grid levels ARE the
+        // position. Cancel-only is correct for every shutdown reason.
         let broker = cx.broker(self.exchange())?;
         tracing::info!("Shutting down grid — cancelling all orders");
         if let Err(e) = broker.cancel_all_orders(self.symbol()).await {

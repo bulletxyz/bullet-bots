@@ -20,3 +20,6 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 rand = { workspace = true }
 axum = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }

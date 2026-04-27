@@ -61,6 +61,7 @@ pub enum ArbState {
     Exiting {
         client_id: String,
         reason: ExitReason,
+        entry_side: Side,
     },
 }
 
@@ -345,10 +346,10 @@ impl ReferenceArbActor {
             self.state = ArbState::flat();
             return Ok(());
         }
-        let (close_side, qty) = if pos.is_sign_positive() {
-            (Side::Sell, pos)
+        let (entry_side, close_side, qty) = if pos.is_sign_positive() {
+            (Side::Buy, Side::Sell, pos)
         } else {
-            (Side::Buy, -pos)
+            (Side::Sell, Side::Buy, -pos)
         };
 
         if self.config.dry_run {
@@ -397,7 +398,7 @@ impl ReferenceArbActor {
         let broker = cx.broker(&self.config.exchange)?;
         match broker.place_orders(&[order]).await {
             Ok(_) => {
-                self.state = ArbState::Exiting { client_id, reason };
+                self.state = ArbState::Exiting { client_id, reason, entry_side };
             }
             Err(e) => {
                 tracing::error!(error = %e, "Exit order placement failed; will retry on tick");
@@ -460,13 +461,18 @@ impl Actor for ReferenceArbActor {
 
     async fn wind_down(
         &mut self,
-        _reason: &WindDownReason,
+        reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
         let broker = cx.broker(&self.config.exchange)?;
         let _ = broker.cancel_all_orders(&self.config.symbol).await;
 
-        if !self.inventory.net_position.is_zero() {
+        // On FeedFailed we can't trust the current price — skip the flatten
+        // to avoid sending an order based on a stale or missing reference.
+        // For all other reasons (Signal, InputsClosed, ActorFailed) we attempt
+        // to close any open position before exiting.
+        let should_flatten = !matches!(reason, WindDownReason::FeedFailed { .. });
+        if should_flatten && !self.inventory.net_position.is_zero() {
             let spread = self.compute_spread_bps().unwrap_or(Decimal::ZERO);
             let _ = self.place_exit(cx, ExitReason::WindDown, spread).await;
         }
@@ -618,7 +624,7 @@ impl EventHandler<OrderLifecycle> for ReferenceArbActor {
                         ArbState::flat()
                     };
                 }
-                ArbState::Exiting { reason, .. } => {
+                ArbState::Exiting { reason, entry_side, .. } => {
                     tracing::warn!(
                         client_id = ?event.order.client_id,
                         status = ?event.order.status,
@@ -627,20 +633,13 @@ impl EventHandler<OrderLifecycle> for ReferenceArbActor {
                     );
                     // Drop back to Holding so the tick handler re-places the exit.
                     // entry_spread_bps is not preserved across Exiting — use zero
-                    // (worst case: next re-place relies on the same TP/SL still
-                    // being true, which it is if we're still in adverse territory).
+                    // (next re-place relies on TP/SL still being true, which it
+                    // is if we're still in adverse territory).
                     self.state = ArbState::Holding {
-                        side: Side::Buy, // placeholder; see note below
+                        side: *entry_side,
                         entry_spread_bps: Decimal::ZERO,
                         ticks: 0,
                     };
-                    // Note: we don't actually know the original entry_side here.
-                    // In practice the tick handler will observe inventory and
-                    // place a close on the correct side via place_exit(). The
-                    // `side` in Holding is advisory for the TP/SL math — with
-                    // entry_spread_bps=0 and placeholder side, TP/SL thresholds
-                    // will not fire unless the current spread_bps is extreme,
-                    // which is fine: the timeout path will catch it.
                 }
                 _ => {}
             },

@@ -73,7 +73,8 @@
 //! `EventHandler<E>` impl — you can't subscribe to an event your actor
 //! can't handle.
 //!
-//! See `AGENTS.md` and `HACKING.md` at the repo root for a fuller tour.
+//! See `AGENTS.md` at the repo root for a fuller tour, and
+//! `examples/minimal.rs` in this crate for a runnable self-contained demo.
 
 mod actor;
 mod builder;
