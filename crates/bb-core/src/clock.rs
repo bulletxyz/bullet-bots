@@ -44,7 +44,10 @@ impl Clock for SystemClock {
     }
 
     fn unix_ms(&self) -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0)
     }
 }
 
@@ -85,7 +88,7 @@ impl TestClock {
     /// Advance logical time by `duration`. Both `now()` and `unix_ms()` advance.
     pub fn advance(&self, duration: Duration) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        inner.unix_ms += duration.as_millis() as u64;
+        inner.unix_ms += u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         inner.offset += duration;
     }
 

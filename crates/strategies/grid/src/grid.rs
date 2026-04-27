@@ -91,6 +91,7 @@ impl GridState {
 
     /// Enable trend-filter EMAs at construction time.
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn with_trend_filter(mut self, cfg: &TrendFilterConfig) -> Self {
         self.fast_ema = Some(Ema::new(cfg.fast_secs as f64));
         self.slow_ema = Some(Ema::new(cfg.slow_secs as f64));
@@ -182,6 +183,7 @@ impl GridState {
     /// Update trend-filter EMAs from a fresh mid observation and return the
     /// current `(divergence_bps, paused)`. Noop / returns `(0, paused)` when
     /// the filter isn't configured.
+    #[allow(clippy::cast_precision_loss)]
     pub fn update_trend_filter(
         &mut self,
         mid: Decimal,

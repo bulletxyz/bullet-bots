@@ -36,6 +36,7 @@ impl Ema {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use std::time::Duration;
 

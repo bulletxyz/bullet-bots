@@ -141,6 +141,7 @@ impl AvellanedaStoikovActor {
         Ok(())
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn build_ladder(&self, mid: Decimal) -> Option<(Quote, Vec<LadderRung>)> {
         let sigma = self.volatility.sigma()?;
         let mid_f = mid.to_f64()?;

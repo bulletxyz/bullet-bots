@@ -40,6 +40,7 @@ impl Volatility {
     /// Stddev of log returns across the buffered samples. Returns `None` until
     /// we have at least three samples (two returns needed for Bessel-corrected
     /// sample variance; one return gives 0/0 which is undefined).
+    #[allow(clippy::cast_precision_loss)]
     pub fn sigma(&self) -> Option<f64> {
         if self.samples.len() < 2 {
             return None;
@@ -69,6 +70,7 @@ impl Volatility {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 

@@ -96,7 +96,10 @@ impl Tick {
     pub fn now() -> Self {
         let at = Instant::now();
         let unix_ms =
-            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0);
         Self { at, unix_ms }
     }
 }
