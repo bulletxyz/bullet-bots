@@ -19,7 +19,9 @@ status_port = 3030
 [exchanges.bullet]
 type = "bullet"
 network = "testnet"
-private_key_hex = ""
+# Key material — do NOT put private keys in this file.
+# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
+# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY_HEX="0x..."
 
 [strategy]
 type = "grid"

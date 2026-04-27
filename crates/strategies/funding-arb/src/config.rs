@@ -35,10 +35,6 @@ pub struct FundingArbConfig {
     /// Base asset size per leg.
     pub order_size: Decimal,
 
-    /// Maximum USD notional per leg.
-    #[serde(default = "default_max_notional")]
-    pub max_notional_usd: Decimal,
-
     /// Maximum net delta imbalance before emergency flatten.
     #[serde(default = "default_max_delta")]
     pub max_delta_imbalance: Decimal,
@@ -65,10 +61,6 @@ pub struct FundingArbConfig {
     /// while the condition that triggered it is still live.
     #[serde(default = "default_min_flat_hold_secs")]
     pub min_flat_hold_secs: u64,
-}
-
-fn default_max_notional() -> Decimal {
-    Decimal::new(10_000, 0)
 }
 
 fn default_max_delta() -> Decimal {

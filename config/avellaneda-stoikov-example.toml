@@ -2,20 +2,31 @@
 # Run with: cargo run --bin bb-bot -- run --config config/avellaneda-stoikov-example.toml
 
 [engine]
-tick_interval_ms = 2000
+tick_interval_ms = 200
 status_port = 3030
 
 [exchanges.bullet]
 type = "bullet"
 network = "testnet"
-# Set via environment: export BB_BULLET_PRIVATE_KEY_HEX="0x..."
-private_key_hex = ""
+# Key material — do NOT put private keys in this file.
+# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
+# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY_HEX="0x..."
 
 [strategy]
 type = "avellaneda-stoikov"
 
 [strategy.avellaneda-stoikov]
 symbol = "BTC-USD"
+
+# Optional fair-value MM mode. When `reference_exchange` is set, the A-S
+# formula uses the reference venue's mid as `s` instead of Bullet's own mid.
+# This is the right choice for thin venues (e.g. testnet) where Bullet's
+# book barely moves — Binance gives a real-time fair-value anchor.
+# Comment out to fall back to single-venue (textbook) A-S.
+reference_exchange = "binance"
+reference_symbol = "btcusdt"
+reference_market = "perp"           # "perp" (default) or "spot"
+reference_stale_secs = 10
 # Quote size and inventory cap (used to normalize the A-S skew term and as a
 # hard backstop).
 order_size = "0.001"
@@ -27,33 +38,55 @@ inventory_target = "0"
 # spread. τ scales the inventory-skew contribution.
 gamma = "0.5"
 kappa = "1.5"
-order_horizon_secs = 60
+order_horizon_secs = 10
 
 # Rolling-window volatility estimator (log-return stddev).
-vol_window_secs = 600
+vol_window_secs = 60
 
-# Re-quote cadence.
-order_refresh_secs = 10
+# Forced-refresh cadence (seconds). Only kicks in when no book/reference
+# updates have moved the fair value past `amend_threshold_bps` for this long
+# — a fallback for calm markets, not the primary trigger.
+order_refresh_secs = 1
+
+# Selective amend threshold in bps of mid. A slot's price must drift at least
+# this far before we send an amend. Lower = more reactive (more round-trips,
+# higher rate-limit pressure); higher = laggier quotes but fewer API calls.
+# At BTC ≈ $77k:
+#   0.5 bps ≈ $3.85 trigger — conservative.
+#   0.1 bps ≈ $0.77 — moderate (this default).
+#   0.02 bps ≈ $0.15 — aggressive; see `avellaneda-stoikov-test.toml`.
+amend_threshold_bps = "0.1"
+
+# Per-level threshold widening. Outer rungs fill less often, so chasing fair
+# value on them just burns API. With base 0.1 bps and step 0.1, level 0 trips
+# at 0.1 bps, level 1 at 0.2 bps, level 4 at 0.5 bps. Set to 0 for flat.
+amend_threshold_step_bps = "0.1"
+
+# Minimum interval (ms) between API-emitting refreshes. Caps the actor's
+# round-trip rate so a hot reference feed (Binance bookTicker can hit 30+ Hz)
+# doesn't queue events faster than Bullet REST can settle. 100ms = up to
+# 10 amends/sec.
+min_refresh_interval_ms = 100
 
 # Half-spread floor/ceiling in bps of mid. The floor should always beat
 # round-trip maker fees (see [fees]); the ceiling caps runaway A-S in vol spikes.
-min_half_spread_bps = "10"
-max_half_spread_bps = "500"
+min_half_spread_bps = "1"
+max_half_spread_bps = "10"
 
 # Multi-level ladder. Level 0 sits at the A-S inner quote; each outer level
 # steps out by `order_level_spread_bps` of mid from the inner half-spread.
 # `order_level_amount_step` adds (i × step) × order_size to each outer level —
 # 0 means flat size across levels.
-order_levels = 3
-order_level_spread_bps = "10"
-order_level_amount_step = "0"
+order_levels = 5
+order_level_spread_bps = "2"
+order_level_amount_step = "0.1"
 
 order_type = "post_only"
 
 [strategy.avellaneda-stoikov.fees]
 maker_bps = "1.0"
-taker_bps = "5.0"
-min_spread_fee_multiplier = "3.0"
+taker_bps = "4.0"
+min_spread_fee_multiplier = "1.0"
 
 [logging]
 level = "info"
