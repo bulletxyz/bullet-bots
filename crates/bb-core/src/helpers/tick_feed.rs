@@ -20,6 +20,7 @@ impl TickFeed {
         Self { period }
     }
 
+    /// `ms = 0` is silently coerced to 1 ms to keep `interval()` valid.
     pub fn every_ms(ms: u64) -> Self {
         Self::new(Duration::from_millis(ms.max(1)))
     }

@@ -5,9 +5,10 @@
 //! mid-price into the event bus so strategies (e.g. `reference-arb`) can
 //! compare a Bullet-side price to a global fair-value signal.
 //!
-//! Single event type: [`ReferencePriceUpdate`] emitted from a single feed
-//! [`BinanceReferencePriceFeed`] connected via [`connect_binance`].
+//! Single event type: [`ReferencePriceUpdate`] emitted from an [`MpscFeed`]
+//! connected via [`connect_binance`].
 
 pub mod feed;
 
-pub use feed::{BinanceMarket, BinanceReferencePriceFeed, ReferencePriceUpdate, connect_binance};
+pub use feed::{BinanceMarket, ReferencePriceUpdate, connect_binance};
+pub use bb_core::harness::MpscFeed;

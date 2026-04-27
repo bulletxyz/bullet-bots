@@ -89,5 +89,5 @@ pub use actor::{Actor, ActorContext, EventHandler, WindDownReason};
 pub use builder::{ActorSpec, HarnessBuilder};
 pub use bus::EventBus;
 pub use event::Event;
-pub use feed::{EventFeed, EventTx, FeedContext, NoSubscribers};
+pub use feed::{EventFeed, EventTx, FeedContext, MpscFeed, NoSubscribers};
 pub use harness::Harness;

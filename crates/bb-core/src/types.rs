@@ -131,6 +131,12 @@ pub struct NewOrder {
 }
 
 #[derive(Debug, Clone)]
+pub struct AmendOrder {
+    pub cancel: CancelOrder,
+    pub new_order: NewOrder,
+}
+
+#[derive(Debug, Clone)]
 pub struct CancelOrder {
     pub symbol: String,
     pub order_id: String,
@@ -142,7 +148,11 @@ pub struct CancelOrder {
 
 #[derive(Debug, Clone)]
 pub struct OrderResult {
-    pub order_id: String,
+    /// Venue-assigned order ID when placement is confirmed synchronously.
+    /// `None` means the outcome is unknown — listen on the lifecycle stream.
+    /// Bullet does not return an oid synchronously (orders are submitted as
+    /// blockchain transactions); Hyperliquid does.
+    pub order_id: Option<String>,
     pub client_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,

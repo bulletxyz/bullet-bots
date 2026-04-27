@@ -14,9 +14,7 @@
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
-use bb_core::error::BotError;
-use bb_core::harness::{EventFeed, EventTx, FeedContext};
+use bb_core::harness::MpscFeed;
 use futures_util::{SinkExt, StreamExt};
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -24,16 +22,22 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-/// Reference price update — a mid price from an external read-only venue.
+/// Reference price update — a fair-value snapshot from an external venue.
 ///
-/// Emitted by Binance's bookTicker stream. Consumers should treat `received_at`
-/// as a local monotonic timestamp for staleness checks; it is **not** the
-/// exchange's event time.
+/// `mid` is the **microprice** `(bid · ask_size + ask · bid_size) /
+/// (bid_size + ask_size)`. The cross-weighting captures top-of-book imbalance
+/// (small ask-size → next trade likely lifts the ask, so fair value sits
+/// closer to ask), and unlike the simple `(bid+ask)/2` it updates on every
+/// size change even when bid/ask prices are pinned. When sizes are zero or
+/// missing we fall back to plain mid.
+///
+/// Emitted by Binance's bookTicker stream. Treat `received_at` as a local
+/// monotonic timestamp for staleness checks; it is **not** exchange time.
 #[derive(Debug, Clone)]
 pub struct ReferencePriceUpdate {
     /// Upstream symbol as reported by Binance (e.g. `"BTCUSDT"`).
     pub symbol: String,
-    /// `(best_bid + best_ask) / 2`.
+    /// Microprice (see struct doc).
     pub mid: Decimal,
     /// Local receive instant — used by strategies to detect stale feeds.
     pub received_at: Instant,
@@ -42,9 +46,16 @@ pub struct ReferencePriceUpdate {
 /// Incoming bookTicker payload. Binance sends unquoted decimals as strings.
 #[derive(Debug, Deserialize)]
 struct BookTicker {
-    s: String,
-    b: String,
-    a: String,
+    #[serde(rename = "s")]
+    symbol: String,
+    #[serde(rename = "b")]
+    bid: String,
+    #[serde(rename = "B")]
+    bid_size: String,
+    #[serde(rename = "a")]
+    ask: String,
+    #[serde(rename = "A")]
+    ask_size: String,
 }
 
 /// Which Binance venue to reference.
@@ -87,7 +98,7 @@ impl std::str::FromStr for BinanceMarket {
 /// reconnecting background task and returns the feed handle. Connection
 /// attempts happen on the spawned task with 1s→30s exponential backoff —
 /// this fn itself never fails.
-pub fn connect_binance(symbol: &str, market: BinanceMarket) -> BinanceReferencePriceFeed {
+pub fn connect_binance(symbol: &str, market: BinanceMarket) -> MpscFeed<ReferencePriceUpdate> {
     let symbol = symbol.to_lowercase();
     let url = format!("wss://{}/ws/{symbol}@bookTicker", market.host());
     let (tx, rx) = mpsc::unbounded_channel::<ReferencePriceUpdate>();
@@ -96,7 +107,7 @@ pub fn connect_binance(symbol: &str, market: BinanceMarket) -> BinanceReferenceP
         run_ws_loop(url, tx).await;
     });
 
-    BinanceReferencePriceFeed { rx }
+    MpscFeed::new(rx)
 }
 
 async fn run_ws_loop(url: String, tx: mpsc::UnboundedSender<ReferencePriceUpdate>) {
@@ -158,53 +169,52 @@ async fn run_ws_loop(url: String, tx: mpsc::UnboundedSender<ReferencePriceUpdate
 fn parse_ticker(text: &str) -> Result<ReferencePriceUpdate, String> {
     let tick: BookTicker =
         serde_json::from_str(text).map_err(|e| format!("json: {e}; raw={text}"))?;
-    let bid = Decimal::from_str(&tick.b).map_err(|e| format!("bid decimal: {e}"))?;
-    let ask = Decimal::from_str(&tick.a).map_err(|e| format!("ask decimal: {e}"))?;
+    let bid = Decimal::from_str(&tick.bid).map_err(|e| format!("bid decimal: {e}"))?;
+    let ask = Decimal::from_str(&tick.ask).map_err(|e| format!("ask decimal: {e}"))?;
+    let bid_size = Decimal::from_str(&tick.bid_size).map_err(|e| format!("bid_size: {e}"))?;
+    let ask_size = Decimal::from_str(&tick.ask_size).map_err(|e| format!("ask_size: {e}"))?;
+    let total = bid_size + ask_size;
+    let mid = if total.is_zero() {
+        (bid + ask) / Decimal::from(2)
+    } else {
+        // Microprice — cross-weighted: bid gets ask_size weight (small
+        // ask-size → trade likely to lift, fair value tilts toward ask).
+        (bid * ask_size + ask * bid_size) / total
+    };
     Ok(ReferencePriceUpdate {
-        symbol: tick.s,
-        mid: (bid + ask) / Decimal::from(2),
+        symbol: tick.symbol,
+        mid,
         received_at: Instant::now(),
     })
 }
 
-/// Feed handle. Its `run` method forwards events from the background WS
-/// task onto the harness bus.
-pub struct BinanceReferencePriceFeed {
-    rx: mpsc::UnboundedReceiver<ReferencePriceUpdate>,
-}
-
-#[async_trait]
-impl EventFeed<ReferencePriceUpdate> for BinanceReferencePriceFeed {
-    async fn run(
-        self: Box<Self>,
-        tx: EventTx<ReferencePriceUpdate>,
-        cx: FeedContext,
-    ) -> Result<(), BotError> {
-        let mut this = *self;
-        loop {
-            tokio::select! {
-                biased;
-                () = cx.cancelled() => return Ok(()),
-                maybe = this.rx.recv() => match maybe {
-                    Some(event) => { let _ = tx.send(event); }
-                    None => return Ok(()),
-                }
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_bookticker_frame() {
-        let frame = r#"{"u":400900217,"s":"BTCUSDT","b":"25.35190000","B":"31.21000000","a":"25.36520000","A":"40.66000000"}"#;
+    fn microprice_balanced_equals_mid() {
+        // B == A → microprice degenerates to plain mid.
+        let frame = r#"{"u":1,"s":"BTCUSDT","b":"100","B":"5","a":"102","A":"5"}"#;
         let event = parse_ticker(frame).expect("parse");
-        assert_eq!(event.symbol, "BTCUSDT");
-        // mid = (25.3519 + 25.3652) / 2 = 25.35855
-        assert_eq!(event.mid, Decimal::from_str("25.35855").unwrap());
+        assert_eq!(event.mid, Decimal::from(101));
+    }
+
+    #[test]
+    fn microprice_imbalanced_tilts_toward_thin_side() {
+        // Tiny ask size → next trade likely lifts; fair value tilts toward ask.
+        let frame = r#"{"u":1,"s":"BTCUSDT","b":"100","B":"9","a":"102","A":"1"}"#;
+        let event = parse_ticker(frame).expect("parse");
+        // micro = (100*1 + 102*9) / 10 = 1018/10 = 101.8 — pulled up from 101.
+        assert_eq!(event.mid, Decimal::from_str("101.8").unwrap());
+    }
+
+    #[test]
+    fn microprice_falls_back_to_mid_when_sizes_zero() {
+        let frame = r#"{"u":1,"s":"BTCUSDT","b":"100","B":"0","a":"102","A":"0"}"#;
+        let event = parse_ticker(frame).expect("parse");
+        assert_eq!(event.mid, Decimal::from(101));
     }
 
     #[test]
@@ -219,7 +229,7 @@ mod tests {
 
     #[test]
     fn rejects_non_decimal_price() {
-        let frame = r#"{"s":"BTCUSDT","b":"notanumber","a":"1"}"#;
+        let frame = r#"{"s":"BTCUSDT","b":"notanumber","B":"1","a":"1","A":"1"}"#;
         assert!(parse_ticker(frame).is_err());
     }
 }

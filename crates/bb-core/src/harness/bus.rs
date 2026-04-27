@@ -33,13 +33,13 @@ impl EventBus {
     /// Obtain a sender for events of type `E`. The first call for a given `E`
     /// creates the channel; later calls return clones of the same sender.
     pub fn sender<E: Event>(&self) -> broadcast::Sender<E> {
-        let mut guard = self.inner.lock().expect("event bus mutex poisoned");
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let entry = guard
             .entry(TypeId::of::<E>())
             .or_insert_with(|| Box::new(broadcast::channel::<E>(DEFAULT_CAPACITY).0));
         entry
             .downcast_ref::<broadcast::Sender<E>>()
-            .expect("EventBus TypeId maps to wrong sender type")
+            .unwrap_or_else(|| unreachable!("EventBus: TypeId collision — impossible with monomorphized E"))
             .clone()
     }
 

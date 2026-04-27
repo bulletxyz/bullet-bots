@@ -99,7 +99,7 @@ impl ReferenceArbActor {
             config,
             state: ArbState::flat(),
             inventory: InventoryTracker::new(),
-            client_ids: ClientIdIssuer::new(),
+            client_ids: ClientIdIssuer::session_seeded(),
             bullet_book: None,
             bullet_mid: None,
             binance_mid: None,

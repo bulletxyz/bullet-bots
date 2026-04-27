@@ -114,7 +114,7 @@ impl Broker for NullBroker {
         Ok(orders
             .iter()
             .map(|o| OrderResult {
-                order_id: format!("test-{}", self.next_order_id.fetch_add(1, Ordering::Relaxed)),
+                order_id: Some(format!("test-{}", self.next_order_id.fetch_add(1, Ordering::Relaxed))),
                 client_id: o.client_id.clone(),
                 success: true,
                 error: None,

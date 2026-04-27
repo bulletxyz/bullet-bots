@@ -602,7 +602,7 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
     let results = broker.place_orders(&[order]).await?;
     for r in &results {
         if r.success {
-            println!("Close order accepted: order_id={}", r.order_id);
+            println!("Close order accepted: order_id={:?}", r.order_id);
         } else {
             println!("Close order FAILED: {:?}", r.error);
         }

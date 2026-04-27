@@ -13,12 +13,34 @@ use async_trait::async_trait;
 
 use crate::error::BotError;
 use crate::types::{
-    Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult, Position,
+    AmendOrder, Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult,
+    Position,
 };
 
 #[async_trait]
 pub trait Broker: Send + Sync + 'static {
     fn name(&self) -> &str;
+
+    /// Drains any "user-data WebSocket reconnected" signal that the broker's
+    /// connection layer has observed since the previous call. Strategies
+    /// consume this in their refresh loop to force an immediate REST
+    /// reconciliation: any state changes during the disconnect window
+    /// (fills, cancels) are otherwise invisible until the next periodic
+    /// reconcile fires.
+    ///
+    /// Default: always `false` (broker has no reconnect notion).
+    fn take_reconcile_signal(&self) -> bool {
+        false
+    }
+
+    /// Reports whether the broker's connection has been permanently lost.
+    /// Strategies should call `ActorContext::request_shutdown()` so the
+    /// harness winds down cleanly rather than running blind.
+    ///
+    /// Default: always `false`.
+    fn is_disconnected(&self) -> bool {
+        false
+    }
 
     async fn get_orderbook(&self, symbol: &str, depth: usize) -> Result<OrderBook, BotError>;
     async fn get_balances(&self) -> Result<Vec<Balance>, BotError>;
@@ -31,6 +53,19 @@ pub trait Broker: Send + Sync + 'static {
         cancels: &[CancelOrder],
     ) -> Result<Vec<CancelResult>, BotError>;
     async fn cancel_all_orders(&self, symbol: &str) -> Result<(), BotError>;
+
+    /// Amend live quotes atomically. Each entry pairs a cancel with a new
+    /// placement. Brokers that support a native amend endpoint override this;
+    /// others fall back to sequential cancel-then-place.
+    async fn amend_orders(&self, amends: &[AmendOrder]) -> Result<Vec<OrderResult>, BotError> {
+        if amends.is_empty() {
+            return Ok(vec![]);
+        }
+        let cancels: Vec<CancelOrder> = amends.iter().map(|a| a.cancel.clone()).collect();
+        let orders: Vec<NewOrder> = amends.iter().map(|a| a.new_order.clone()).collect();
+        self.cancel_orders(&cancels).await?;
+        self.place_orders(&orders).await
+    }
 }
 
 /// Name → broker handle. Actors obtain this via `ActorContext::brokers()`.

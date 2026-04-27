@@ -7,16 +7,17 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use bb_core::broker::Broker;
 use bb_core::error::BotError;
 use bb_core::types::{
-    Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult, OrderStatus,
-    OrderType, Position, Side,
+    AmendOrder, Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult,
+    OrderStatus, OrderType, Position, Side,
 };
 use bullet_rust_sdk::{
-    CancelOrderArgs, Client, ClientOrderId, MarketId, NewOrderArgs, OrderId,
+    AmendOrderArgs, CancelOrderArgs, Client, ClientOrderId, MarketId, NewOrderArgs, OrderId,
     OrderType as BulletOrderType, PositiveDecimal, Side as BulletSide,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
@@ -29,14 +30,29 @@ pub(crate) struct Increments {
     pub step_size: Decimal,
 }
 
+/// Cross-thread health state shared with the WS muxer task. The muxer flips
+/// `reconcile_pending` on every reconnect (so the strategy can resync immediately
+/// rather than wait for the next periodic sweep) and `disconnected` once the
+/// SDK has exhausted its retry budget (so the strategy can request shutdown).
+#[derive(Debug, Default)]
+pub(crate) struct ConnectionHealth {
+    pub reconcile_pending: AtomicBool,
+    pub disconnected: AtomicBool,
+}
+
 pub struct BulletBroker {
     client: Arc<Client>,
     increments: HashMap<String, Increments>,
+    health: Arc<ConnectionHealth>,
 }
 
 impl BulletBroker {
-    pub(crate) fn new(client: Arc<Client>, increments: HashMap<String, Increments>) -> Self {
-        Self { client, increments }
+    pub(crate) fn new(
+        client: Arc<Client>,
+        increments: HashMap<String, Increments>,
+        health: Arc<ConnectionHealth>,
+    ) -> Self {
+        Self { client, increments, health }
     }
 
     fn market_id(&self, symbol: &str) -> Result<MarketId, BotError> {
@@ -96,6 +112,14 @@ pub(crate) async fn load_increments(
 impl Broker for BulletBroker {
     fn name(&self) -> &str {
         "bullet"
+    }
+
+    fn take_reconcile_signal(&self) -> bool {
+        self.health.reconcile_pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        self.health.disconnected.load(Ordering::Acquire)
     }
 
     async fn get_orderbook(&self, symbol: &str, depth: usize) -> Result<OrderBook, BotError> {
@@ -239,7 +263,7 @@ impl Broker for BulletBroker {
                 Ok(orders
                     .iter()
                     .map(|o| OrderResult {
-                        order_id: String::new(),
+                        order_id: None,
                         client_id: o.client_id.clone(),
                         success: true,
                         error: None,
@@ -247,14 +271,22 @@ impl Broker for BulletBroker {
                     .collect())
             }
             Err(e) => {
-                tracing::error!(error = %e, "Failed to place orders");
+                // Broker is intentionally a thin pass-through: an HTTP error
+                // here may mean the tx reverted OR that it committed and the
+                // response delivery failed. We don't try to disambiguate at
+                // submit time — the strategy treats this as "outcome
+                // unknown" and trusts the WS user-data stream
+                // (OrderUpdate/Trade) to surface the truth, with a periodic
+                // REST reconcile as the gap-recovery safety net.
+                tracing::warn!(error = %e, "place tx errored — outcome unknown until WS confirms");
+                let err_str = e.to_string();
                 Ok(orders
                     .iter()
                     .map(|o| OrderResult {
-                        order_id: String::new(),
+                        order_id: None,
                         client_id: o.client_id.clone(),
                         success: false,
-                        error: Some(e.to_string()),
+                        error: Some(err_str.clone()),
                     })
                     .collect())
             }
@@ -279,10 +311,12 @@ impl Broker for BulletBroker {
                     .as_deref()
                     .and_then(|s| s.parse::<u64>().ok())
                     .map(ClientOrderId);
-                if order_id.is_none() && client_order_id.is_none() {
-                    return None;
+                // Bullet API requires exactly one identifier — prefer order_id.
+                match (order_id, client_order_id) {
+                    (Some(oid), _) => Some(CancelOrderArgs { order_id: Some(oid), client_order_id: None }),
+                    (None, Some(cid)) => Some(CancelOrderArgs { order_id: None, client_order_id: Some(cid) }),
+                    (None, None) => None,
                 }
-                Some(CancelOrderArgs { order_id, client_order_id })
             })
             .collect();
 
@@ -296,13 +330,104 @@ impl Broker for BulletBroker {
                 })
                 .collect()),
             Err(e) => {
-                tracing::error!(error = %e, "Failed to cancel orders");
+                tracing::warn!(error = %e, "cancel tx errored — outcome unknown until WS confirms");
+                let err_str = e.to_string();
                 Ok(cancels
                     .iter()
                     .map(|c| CancelResult {
                         order_id: c.order_id.clone(),
                         success: false,
-                        error: Some(e.to_string()),
+                        error: Some(err_str.clone()),
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    async fn amend_orders(&self, amends: &[AmendOrder]) -> Result<Vec<OrderResult>, BotError> {
+        if amends.is_empty() {
+            return Ok(vec![]);
+        }
+        let symbol = &amends[0].new_order.symbol;
+        let market_id = self.market_id(symbol)?;
+        let incr = *self
+            .increments
+            .get(symbol)
+            .ok_or_else(|| BotError::config(format!("No tick/step cached for {symbol}")))?;
+
+        let sdk_amends: Vec<AmendOrderArgs> = amends
+            .iter()
+            .filter_map(|a| {
+                let order_id = a.cancel.order_id.parse::<u64>().ok().map(OrderId);
+                let client_order_id = a
+                    .cancel
+                    .client_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(ClientOrderId);
+                let cancel = match (order_id, client_order_id) {
+                    (Some(oid), _) => CancelOrderArgs { order_id: Some(oid), client_order_id: None },
+                    (None, Some(cid)) => CancelOrderArgs { order_id: None, client_order_id: Some(cid) },
+                    (None, None) => return None,
+                };
+                let o = &a.new_order;
+                let price_strategy = match o.side {
+                    Side::Buy => RoundingStrategy::ToZero,
+                    Side::Sell => RoundingStrategy::AwayFromZero,
+                };
+                let price = Self::snap(o.price, incr.tick_size, price_strategy);
+                let qty = Self::snap(o.quantity, incr.step_size, RoundingStrategy::ToZero);
+                let price = PositiveDecimal::try_from(price).ok()?;
+                let size = PositiveDecimal::try_from(qty).ok()?;
+                let side = match o.side {
+                    Side::Buy => BulletSide::Bid,
+                    Side::Sell => BulletSide::Ask,
+                };
+                let order_type = match o.order_type {
+                    OrderType::Limit => BulletOrderType::Limit,
+                    OrderType::PostOnly => BulletOrderType::PostOnly,
+                    OrderType::Market => BulletOrderType::ImmediateOrCancel,
+                };
+                let new_client_order_id = o
+                    .client_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(ClientOrderId);
+                Some(AmendOrderArgs {
+                    cancel,
+                    place: NewOrderArgs {
+                        price,
+                        size,
+                        side,
+                        order_type,
+                        reduce_only: o.reduce_only,
+                        client_order_id: new_client_order_id,
+                        pending_tpsl_pair: None,
+                    },
+                })
+            })
+            .collect();
+
+        match self.client.amend_orders(market_id, sdk_amends, None).await {
+            Ok(_) => Ok(amends
+                .iter()
+                .map(|a| OrderResult {
+                    order_id: None,
+                    client_id: a.new_order.client_id.clone(),
+                    success: true,
+                    error: None,
+                })
+                .collect()),
+            Err(e) => {
+                tracing::warn!(error = %e, "amend tx errored — outcome unknown until WS confirms");
+                let err_str = e.to_string();
+                Ok(amends
+                    .iter()
+                    .map(|a| OrderResult {
+                        order_id: None,
+                        client_id: a.new_order.client_id.clone(),
+                        success: false,
+                        error: Some(err_str.clone()),
                     })
                     .collect())
             }

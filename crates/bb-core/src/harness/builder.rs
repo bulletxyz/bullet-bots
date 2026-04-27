@@ -56,7 +56,7 @@ where
     ) -> JoinHandle<Result<(), BotError>> {
         let tx = EventTx::new(bus.sender::<E>());
         let ctx = FeedContext::new(cancel);
-        let feed = self.feed.take().expect("feed consumed twice");
+        let feed = self.feed.take().unwrap_or_else(|| unreachable!("feed entry consumed twice"));
         tokio::spawn(async move { feed.run(tx, ctx).await })
     }
 }
@@ -234,12 +234,9 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
             ));
         }
 
-        // `init`/`wind_down` drivers. We store the actor Arc + ctx here so the
-        // harness can call into them at the right points — `init` before any
-        // event reaches the subscription tasks (we can't strictly enforce
-        // that ordering with broadcast channels; callers should publish
-        // after `harness.run()` is awaited), `wind_down` after subscription
-        // tasks have ended.
+        // `init`/`wind_down` drivers. The harness calls `init` before spawning
+        // feeds (so the actor is ready before any event arrives) and `wind_down`
+        // after all subscription tasks have drained.
         let actor_init = Arc::clone(&actor);
         let ctx_init = Arc::clone(&ctx);
         let init_fn: BoxInit = Box::new(move || {

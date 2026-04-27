@@ -13,13 +13,13 @@
 //! HL is structurally impossible. The `order.symbol` vs `exchange` name
 //! confusion is gone too — events are typed and carry explicit `exchange`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
-use bb_core::helpers::InventoryTracker;
+use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
 use bb_core::types::{NewOrder, OrderBook, OrderType, Side};
 use rust_decimal::Decimal;
 
@@ -32,6 +32,14 @@ pub struct FundingArbActor {
     /// Per-venue inventory. Each Trade updates exactly one tracker.
     inventory: HashMap<String, InventoryTracker>,
     books: HashMap<String, OrderBook>,
+    /// Monotonic id-issuer seeded by session epoch so a restart doesn't
+    /// collide with cloids the previous session left dangling on the venue.
+    client_ids: ClientIdIssuer,
+    /// Set of client_ids the strategy has issued. Trade events whose
+    /// `client_id` isn't in this set are ignored — they're external fills
+    /// (e.g., from another bot or manual order placement on the same wallet)
+    /// and would otherwise corrupt our `InventoryTracker` net positions.
+    my_client_ids: HashSet<String>,
 }
 
 impl FundingArbActor {
@@ -44,7 +52,17 @@ impl FundingArbActor {
             state: ArbState::new(),
             inventory,
             books: HashMap::new(),
+            client_ids: ClientIdIssuer::session_seeded(),
+            my_client_ids: HashSet::new(),
         }
+    }
+
+    /// Issue a fresh client_id and remember it so the Trade handler can
+    /// distinguish our fills from external ones on the same wallet.
+    fn issue_client_id(&mut self) -> String {
+        let cid = self.client_ids.issue();
+        self.my_client_ids.insert(cid.clone());
+        cid
     }
 
     fn symbol(&self) -> &str {
@@ -99,14 +117,20 @@ impl FundingArbActor {
         }
     }
 
-    fn make_order(&self, exchange: &str, side: Side, size: Decimal, reduce_only: bool) -> NewOrder {
+    fn make_order(
+        &mut self,
+        exchange: &str,
+        side: Side,
+        size: Decimal,
+        reduce_only: bool,
+    ) -> NewOrder {
         NewOrder {
             symbol: self.symbol().to_string(),
             side,
             order_type: self.order_type(),
             price: self.aggressive_price(exchange, side),
             quantity: size,
-            client_id: None,
+            client_id: Some(self.issue_client_id()),
             reduce_only,
         }
     }
@@ -174,7 +198,8 @@ impl FundingArbActor {
 
     async fn emergency_flatten(&mut self, cx: &ActorContext, reason: &str) -> Result<(), BotError> {
         tracing::warn!(reason, "Emergency flatten");
-        for ex in [&self.config.exchange_a, &self.config.exchange_b] {
+        let exchanges = [self.config.exchange_a.clone(), self.config.exchange_b.clone()];
+        for ex in &exchanges {
             let broker = cx.broker(ex)?;
             let _ = broker.cancel_all_orders(self.symbol()).await;
             let pos = self.net_position(ex);
@@ -318,6 +343,20 @@ impl EventHandler<Trade> for FundingArbActor {
         if event.symbol != self.symbol() {
             return Ok(());
         }
+        // Same wallet may carry orders from other strategies / manual placements.
+        // Only fold fills back into our inventory if we own the client_id.
+        let is_ours = event
+            .client_id
+            .as_deref()
+            .is_some_and(|cid| self.my_client_ids.contains(cid));
+        if !is_ours {
+            tracing::debug!(
+                exchange = %event.exchange,
+                cid = ?event.client_id,
+                "ignoring foreign fill (not in my_client_ids)"
+            );
+            return Ok(());
+        }
         let Some(inv) = self.inventory.get_mut(&event.exchange) else {
             return Ok(());
         };
@@ -348,6 +387,60 @@ impl EventHandler<BookUpdate> for FundingArbActor {
 #[async_trait]
 impl EventHandler<Tick> for FundingArbActor {
     async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
+        // Connection-health checks first — if either broker has lost its WS,
+        // we'd be running blind on stale state. Request shutdown so the
+        // harness can wind down (cancel orders, log final stats) cleanly.
+        for ex in [&self.config.exchange_a, &self.config.exchange_b] {
+            if let Ok(broker) = cx.broker(ex) {
+                if broker.is_disconnected() {
+                    tracing::error!(
+                        exchange = %ex,
+                        "broker reports permanent disconnect — requesting harness shutdown"
+                    );
+                    cx.request_shutdown();
+                    return Ok(());
+                }
+            }
+        }
+        // On a transparent reconnect (or message-stream gap) the broker
+        // raises a one-shot reconcile signal. Sync our `InventoryTracker`
+        // against actual on-venue positions for any leg that flagged.
+        for ex in [self.config.exchange_a.clone(), self.config.exchange_b.clone()] {
+            let broker = match cx.broker(&ex) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if !broker.take_reconcile_signal() {
+                continue;
+            }
+            tracing::warn!(exchange = %ex, "WS reconnect detected — reconciling positions");
+            match broker.get_positions().await {
+                Ok(positions) => {
+                    let venue_pos = positions
+                        .iter()
+                        .find(|p| p.symbol == self.symbol())
+                        .map(|p| match p.side {
+                            Some(Side::Buy) => p.size,
+                            Some(Side::Sell) => -p.size,
+                            None => Decimal::ZERO,
+                        })
+                        .unwrap_or(Decimal::ZERO);
+                    let our_pos = self.net_position(&ex);
+                    if venue_pos != our_pos {
+                        tracing::warn!(
+                            exchange = %ex,
+                            tracked = %our_pos,
+                            actual = %venue_pos,
+                            "position drift after reconnect — resetting tracker"
+                        );
+                        if let Some(inv) = self.inventory.get_mut(&ex) {
+                            inv.net_position = venue_pos;
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(exchange = %ex, error = %e, "reconcile get_positions failed"),
+            }
+        }
         match self.state.phase {
             ArbPhase::Flat => {
                 tracing::info!(

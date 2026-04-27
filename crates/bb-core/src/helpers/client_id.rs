@@ -21,6 +21,17 @@ impl ClientIdIssuer {
         Self { next: start.max(1) }
     }
 
+    /// Seed the sequence from the current Unix epoch so that IDs issued in
+    /// different process restarts don't collide. Each second of wall time gives
+    /// 10 000 unique IDs before wrapping into the next second's range.
+    pub fn session_seeded() -> Self {
+        let epoch_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Self::starting_at(epoch_secs * 10_000)
+    }
+
     pub fn issue(&mut self) -> String {
         let id = self.next.max(1);
         self.next = id + 1;

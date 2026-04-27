@@ -47,7 +47,7 @@ impl GridActor {
             config,
             state,
             inventory: InventoryTracker::new(),
-            client_ids: ClientIdIssuer::new(),
+            client_ids: ClientIdIssuer::session_seeded(),
             book: None,
             anchor: Decimal::ZERO,
         }
@@ -172,8 +172,8 @@ impl GridActor {
             };
             if res.success {
                 level.state = LevelState::Active;
-                if !res.order_id.is_empty() {
-                    level.order_id = Some(res.order_id.clone());
+                if let Some(ref oid) = res.order_id {
+                    level.order_id = Some(oid.clone());
                 }
                 placed += 1;
             } else {

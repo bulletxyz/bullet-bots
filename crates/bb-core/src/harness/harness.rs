@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use super::actor::WindDownReason;
@@ -24,8 +24,6 @@ use super::bus::EventBus;
 use super::status::{StatusState, spawn_server};
 use crate::broker::BrokerRegistry;
 use crate::error::BotError;
-
-type FeedTask = (Arc<str>, JoinHandle<Result<(), BotError>>);
 
 pub(super) struct ActorHandle {
     pub(super) name: Arc<str>,
@@ -113,13 +111,21 @@ impl Harness {
             }
         }
 
-        // 3. Spawn feeds.
-        let mut feed_tasks: Vec<FeedTask> = Vec::new();
+        // 3. Spawn feeds. Each wrapper task carries its own name so join_next
+        //    can identify the completed feed without an external index.
+        let mut feed_set: JoinSet<(Arc<str>, Result<(), BotError>)> = JoinSet::new();
         for feed in self.feeds {
             let name: Arc<str> = Arc::from(feed.name().to_string());
             let task = feed.spawn(&self.bus, shutdown.clone());
+            let feed_name = name.clone();
+            feed_set.spawn(async move {
+                let result = match task.await {
+                    Ok(r) => r,
+                    Err(_) => Err(BotError::config(format!("{feed_name} feed panicked"))),
+                };
+                (feed_name, result)
+            });
             tracing::info!(feed = %name, "feed started");
-            feed_tasks.push((name, task));
         }
 
         // 4. Wait for a shutdown-inducing event.
@@ -133,7 +139,7 @@ impl Harness {
         tokio::pin!(signal_fut);
 
         let reason: WindDownReason = loop {
-            if feed_tasks.is_empty() {
+            if feed_set.is_empty() {
                 break WindDownReason::InputsClosed;
             }
             tokio::select! {
@@ -146,22 +152,24 @@ impl Harness {
                     tracing::info!("Ctrl-C received");
                     break WindDownReason::Signal;
                 }
-                result = await_any_feed(&mut feed_tasks) => {
-                    match result {
-                        FeedExit::Done(name) => {
+                Some(join_res) = feed_set.join_next() => {
+                    match join_res {
+                        Ok((name, Ok(()))) => {
                             tracing::info!(feed = %name, "feed exited cleanly");
                         }
-                        FeedExit::Err(name, e) => {
+                        Ok((name, Err(e))) => {
                             tracing::error!(feed = %name, error = %e, "feed failed");
                             break WindDownReason::FeedFailed {
                                 feed: name.to_string(),
                                 error: e.to_string(),
                             };
                         }
-                        FeedExit::Panicked(name) => {
+                        Err(e) => {
+                            // The wrapper task itself panicked — shouldn't happen
+                            // but guard it anyway.
                             break WindDownReason::FeedFailed {
-                                feed: name.to_string(),
-                                error: "panicked".to_string(),
+                                feed: "<unknown>".to_string(),
+                                error: format!("feed wrapper panicked: {e}"),
                             };
                         }
                     }
@@ -196,40 +204,3 @@ async fn wind_down_all(
     }
     Ok(reason)
 }
-
-enum FeedExit {
-    Done(Arc<str>),
-    Err(Arc<str>, BotError),
-    Panicked(Arc<str>),
-}
-
-/// Await the first task in `tasks` to finish, remove it, and return its exit.
-///
-/// Under the hood we poll each `JoinHandle` once per wakeup. `JoinHandle`
-/// registers the waker on each poll, so when any task completes the runtime
-/// wakes us and we return — no busy loop, no per-tick CPU cost while all
-/// feeds are idle. For small N (one muxer feed per event type per venue —
-/// typically < 10) this beats the ceremony of `FuturesUnordered` + rehydrate
-/// the survivors.
-async fn await_any_feed(tasks: &mut Vec<FeedTask>) -> FeedExit {
-    use std::task::Poll;
-    use futures_util::future::poll_fn;
-
-    let (idx, res) = poll_fn(|cx| {
-        for (i, (_, task)) in tasks.iter_mut().enumerate() {
-            if let Poll::Ready(res) = std::pin::Pin::new(task).poll(cx) {
-                return Poll::Ready((i, res));
-            }
-        }
-        Poll::Pending
-    })
-    .await;
-
-    let (name, _) = tasks.swap_remove(idx);
-    match res {
-        Ok(Ok(())) => FeedExit::Done(name),
-        Ok(Err(e)) => FeedExit::Err(name, e),
-        Err(_) => FeedExit::Panicked(name),
-    }
-}
-

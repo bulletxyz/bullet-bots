@@ -1,8 +1,15 @@
 //! Shared value-conversion helpers used by the Hyperliquid broker + connection.
 
-use bb_core::types::{Balance, OrderBook, Position, Side};
-use hyperliquid_rust_sdk::{L2SnapshotResponse, UserStateResponse};
+use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
+use bb_core::types::{Balance, Order, OrderBook, OrderStatus, OrderType, Position, Side};
+use hyperliquid_rust_sdk::{
+    ActiveAssetCtxData, AssetCtx, L2BookData, L2SnapshotResponse, OrderUpdate, TradeInfo,
+    UserStateResponse,
+};
 use rust_decimal::Decimal;
+use std::str::FromStr;
+
+const EXCHANGE: &str = "hyperliquid";
 
 /// HL uses bare coin names ("BTC"); we use "BTC-USD".
 pub fn to_bb_symbol(hl_coin: &str) -> String {
@@ -61,6 +68,113 @@ pub fn user_state_to_positions(resp: &UserStateResponse) -> Vec<Position> {
             })
         })
         .collect()
+}
+
+pub fn l2_book_to_event(data: &L2BookData) -> BookUpdate {
+    use std::collections::BTreeMap;
+    let bids: BTreeMap<Decimal, Decimal> = data
+        .levels
+        .first()
+        .map(|levels| levels.iter().map(|l| (parse_dec(&l.px), parse_dec(&l.sz))).collect())
+        .unwrap_or_default();
+    let asks: BTreeMap<Decimal, Decimal> = data
+        .levels
+        .get(1)
+        .map(|levels| levels.iter().map(|l| (parse_dec(&l.px), parse_dec(&l.sz))).collect())
+        .unwrap_or_default();
+    BookUpdate {
+        exchange: EXCHANGE.into(),
+        symbol: to_bb_symbol(&data.coin),
+        orderbook: OrderBook { bids, asks, last_update_id: data.time },
+    }
+}
+
+pub fn fill_to_trade(fill: &TradeInfo) -> Option<Trade> {
+    let side = match fill.side.as_str() {
+        "B" | "Buy" | "buy" => Side::Buy,
+        "A" | "Sell" | "sell" => Side::Sell,
+        other => {
+            tracing::warn!(side = other, "HL: unknown side in UserFill — skipping trade");
+            return None;
+        }
+    };
+    Some(Trade {
+        exchange: EXCHANGE.into(),
+        symbol: to_bb_symbol(&fill.coin),
+        order_id: fill.oid.to_string(),
+        client_id: fill.cloid.as_ref().map(|c| c.to_string()),
+        side,
+        price: parse_dec(&fill.px),
+        quantity: parse_dec(&fill.sz),
+    })
+}
+
+pub fn order_update_to_lifecycle(update: &OrderUpdate) -> OrderLifecycle {
+    let order = &update.order;
+    let side = match order.side.as_str() {
+        "B" | "Buy" | "buy" => Side::Buy,
+        "A" | "Sell" | "sell" => Side::Sell,
+        other => {
+            tracing::warn!(side = other, "HL: unknown side in OrderUpdate — defaulting to Buy");
+            Side::Buy
+        }
+    };
+    let status = match update.status.as_str() {
+        "open" | "new" => OrderStatus::Open,
+        "filled" => OrderStatus::Filled,
+        "canceled" | "cancelled" => OrderStatus::Cancelled,
+        "rejected" => OrderStatus::Rejected,
+        "partiallyFilled" => OrderStatus::PartiallyFilled,
+        // HL may surface terminal statuses we haven't enumerated (e.g.
+        // liquidation-cancelled, margin-cancelled). We default to `Open`
+        // so the strategy doesn't act on it — periodic REST reconcile will
+        // catch the discrepancy. Surface the status so we know to add the
+        // proper mapping.
+        other => {
+            tracing::warn!(
+                status = other,
+                oid = order.oid,
+                "Unknown HL order status — defaulting to Open"
+            );
+            OrderStatus::Open
+        }
+    };
+    let orig = parse_dec(&order.orig_sz);
+    let remaining = parse_dec(&order.sz);
+    let filled = (orig - remaining).max(Decimal::ZERO);
+
+    // TODO(P1-15): read the actual order type from the SDK update when the field is available.
+    // PostOnly orders currently surface as Limit, which affects fee accounting.
+    OrderLifecycle {
+        exchange: EXCHANGE.into(),
+        order: Order {
+            id: order.oid.to_string(),
+            client_id: order.cloid.clone(),
+            symbol: to_bb_symbol(&order.coin),
+            side,
+            order_type: OrderType::Limit,
+            price: parse_dec(&order.limit_px),
+            quantity: orig,
+            filled_quantity: filled,
+            status,
+        },
+    }
+}
+
+pub fn active_asset_ctx_to_mark(data: &ActiveAssetCtxData) -> Option<MarkPriceUpdate> {
+    let (mark, funding) = match &data.ctx {
+        AssetCtx::Perps(p) => (
+            Decimal::from_str(&p.shared.mark_px).ok()?,
+            Decimal::from_str(&p.funding).unwrap_or(Decimal::ZERO),
+        ),
+        AssetCtx::Spot(s) => (Decimal::from_str(&s.shared.mark_px).ok()?, Decimal::ZERO),
+    };
+    Some(MarkPriceUpdate {
+        exchange: EXCHANGE.into(),
+        symbol: to_bb_symbol(&data.coin),
+        mark_price: mark,
+        funding_rate: funding,
+    })
 }
 
 #[cfg(test)]

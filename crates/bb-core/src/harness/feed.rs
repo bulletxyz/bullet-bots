@@ -8,7 +8,7 @@
 
 
 use async_trait::async_trait;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::event::Event;
@@ -65,4 +65,37 @@ impl FeedContext {
 #[async_trait]
 pub trait EventFeed<E: Event>: Send + 'static {
     async fn run(self: Box<Self>, tx: EventTx<E>, cx: FeedContext) -> Result<(), BotError>;
+}
+
+/// Generic feed backed by an unbounded mpsc receiver. Exchange adapters use
+/// this to bridge the muxer task (which writes to a `mpsc::Sender<E>`) and the
+/// harness event bus (which the feed forwards into via `EventTx<E>`).
+///
+/// The muxer task is responsible for its own reconnect logic; this struct just
+/// drains the channel into the bus until cancelled or the sender drops.
+pub struct MpscFeed<E: Event> {
+    rx: mpsc::UnboundedReceiver<E>,
+}
+
+impl<E: Event> MpscFeed<E> {
+    pub fn new(rx: mpsc::UnboundedReceiver<E>) -> Self {
+        Self { rx }
+    }
+}
+
+#[async_trait]
+impl<E: Event> EventFeed<E> for MpscFeed<E> {
+    async fn run(self: Box<Self>, tx: EventTx<E>, cx: FeedContext) -> Result<(), BotError> {
+        let mut this = *self;
+        loop {
+            tokio::select! {
+                biased;
+                _ = cx.cancelled() => return Ok(()),
+                maybe = this.rx.recv() => match maybe {
+                    Some(event) => { let _ = tx.send(event); }
+                    None => return Ok(()),
+                }
+            }
+        }
+    }
 }
