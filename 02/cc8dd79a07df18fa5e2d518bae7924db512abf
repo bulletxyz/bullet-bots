@@ -1,0 +1,49 @@
+config/avellaneda-stoikov-test.toml
+  5d0d93b0450093bf 1-81
+config/grid-tight.toml
+  5d0d93b0450093bf 22-24
+crates/strategies/avellaneda-stoikov/src/config.rs
+  5d0d93b0450093bf 1-2,28-52,114-148,205-224
+config/grid-example.toml
+  5d0d93b0450093bf 25-27
+crates/strategies/avellaneda-stoikov/Cargo.toml
+  5d0d93b0450093bf 13
+config/avellaneda-stoikov-example.toml
+  3fd75bfce390c251 73-74,80-82,88-89
+  5d0d93b0450093bf 11-13,20-29,41,44-63,65-69
+config/funding-arb-example.toml
+  5d0d93b0450093bf 11-13,18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "02cc8dd79a07df18fa5e2d518bae7924db512abf",
+  "prompts": {
+    "3fd75bfce390c251": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30814252-d4f7-48c3-9144-0662ef9c70c2",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 8,
+      "accepted_lines": 83,
+      "overriden_lines": 0
+    },
+    "5d0d93b0450093bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "114f34f9-a381-4fbf-9809-3182dec09a85",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 211,
+      "overriden_lines": 0
+    }
+  }
+}
