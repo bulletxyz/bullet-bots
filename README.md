@@ -49,41 +49,10 @@ cargo run --bin bb-bot -- run --config config/grid-example.toml
 
 ## Key management
 
-Private keys are never read from config files — they are passed via environment
-variables so they stay out of version control. There are two options:
+Keys are passed via environment variables, never in config files. Two options:
 
-**Option A — key file (recommended).** Generate a keypair once and store it on
-disk at a path only your user can read:
-
-```sh
-cargo run --bin bb-bot -- keygen --network mainnet
-# writes ~/.config/bullet/id.json (mode 0600)
-```
-
-Then point the bot at the file:
-
-```sh
-export BB_BULLET_KEY_FILE="$HOME/.config/bullet/id.json"
-export BB_HYPERLIQUID_KEY_FILE="$HOME/.config/hyperliquid/id.json"
-```
-
-**Option B — hex key via `.env`.** If you need to supply a raw private key,
-store it in a `.env` file (gitignored, not your shell profile) and source it
-before running:
-
-```sh
-# .env  ← add this file to .gitignore
-BB_BULLET_PRIVATE_KEY_HEX=0x...
-BB_HYPERLIQUID_PRIVATE_KEY_HEX=0x...
-```
-
-```sh
-source .env
-cargo run --bin bb-bot -- run --config config/grid-example.toml
-```
-
-Never `export` a raw private key directly in your shell — it ends up in shell
-history and in the environment of every child process.
+- **Key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` / `BB_HYPERLIQUID_KEY_FILE`.
+- **Hex key:** set `BB_BULLET_PRIVATE_KEY_HEX` / `BB_HYPERLIQUID_PRIVATE_KEY_HEX`, e.g. via a `.env` file (already gitignored).
 
 ## Strategies
 
