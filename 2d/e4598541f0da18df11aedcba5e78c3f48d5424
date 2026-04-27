@@ -1,0 +1,94 @@
+crates/exchanges/hyperliquid/src/broker.rs
+  5d0d93b0450093bf 14-16,30,43-52,57,65,77-84,153,160-168,171,179,181,186-189
+  3fd75bfce390c251 67,113-114,122,193,317,337-343
+crates/bb-core/src/harness/mod.rs
+  3fd75bfce390c251 92
+crates/exchanges/bullet/src/broker.rs
+  5d0d93b0450093bf 10,16-17,20,33-42,46,50-55,117-124,274-282,289,314-318,333-334,340,347-414,416-426,428-430
+  3fd75bfce390c251 266,286,341-346,415,427
+crates/bb-core/src/lib.rs
+  3fd75bfce390c251 1-25,33-40
+crates/strategies/funding-arb/src/strategy.rs
+  5d0d93b0450093bf 16,22,35-42,56,60-67,120-126,133,201-202,346-359,390-443
+  3fd75bfce390c251 55
+crates/strategies/reference-arb/src/strategy.rs
+  3fd75bfce390c251 102
+crates/bb-core/src/harness/feed.rs
+  3fd75bfce390c251 11,69-101
+crates/bb-core/src/harness/builder.rs
+  3fd75bfce390c251 59,237-239
+crates/bb-core/src/harness/harness.rs
+  3fd75bfce390c251 18,114-116,120-127,142,155-157,160,167-169,171-172
+crates/exchanges/hyperliquid/src/lib.rs
+  3fd75bfce390c251 8
+crates/exchanges/binance/src/lib.rs
+  3fd75bfce390c251 8-9,13-14
+crates/exchanges/hyperliquid/src/connection.rs
+  5d0d93b0450093bf 16-18,28,32-35,97-102,106-147,154-164
+  3fd75bfce390c251 22,24,38-41,150,165,170-172,178,186,196,198-201
+crates/bb-core/src/harness/testing.rs
+  3fd75bfce390c251 117
+crates/exchanges/bullet/src/connection.rs
+  3fd75bfce390c251 4-6,21,34-37,64-68,139-142,169,172,175,189,192
+  5d0d93b0450093bf 17,29,121-125,128-137,153,155-159,162-163,178-187,200-204,207-208
+crates/bb-core/src/types.rs
+  3fd75bfce390c251 151-155
+  5d0d93b0450093bf 134-138
+crates/strategies/grid/src/strategy.rs
+  3fd75bfce390c251 50,175-176
+crates/bb-core/src/harness/bus.rs
+  3fd75bfce390c251 36,42
+crates/exchanges/bullet/src/convert.rs
+  3fd75bfce390c251 6-11,14-15,34-171
+crates/bb-core/src/broker.rs
+  5d0d93b0450093bf 16-17,24-44,56-68
+crates/exchanges/bullet/src/lib.rs
+  3fd75bfce390c251 8
+crates/exchanges/binance/src/feed.rs
+  3fd75bfce390c251 17,101,110,200,202-204
+  5d0d93b0450093bf 25,27-35,40,49-58,172-183,185-186,197-199,201,205-215,217,232
+crates/bb-core/src/helpers/client_id.rs
+  3fd75bfce390c251 24-34
+crates/bb-core/src/helpers/tick_feed.rs
+  3fd75bfce390c251 23
+crates/strategies/avellaneda-stoikov/src/strategy.rs
+  3fd75bfce390c251 77,424,452
+  5d0d93b0450093bf 3-11,13-17,23-24,31,34,63-67,82-97,166,184-193,199-217,226,228-229,236,242,246-346,349-359,362-365,367-423,425-451,453-597,600,602,605-607,626-635,640-641,645,681,685-693,697-732,785-808,819-830,835,846
+crates/exchanges/hyperliquid/src/convert.rs
+  3fd75bfce390c251 3-8,10-12,73-177
+crates/bb-bot/src/main.rs
+  3fd75bfce390c251 605
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "2de4598541f0da18df11aedcba5e78c3f48d5424",
+  "prompts": {
+    "3fd75bfce390c251": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30814252-d4f7-48c3-9144-0662ef9c70c2",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 452,
+      "total_deletions": 517,
+      "accepted_lines": 867,
+      "overriden_lines": 0
+    },
+    "5d0d93b0450093bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "114f34f9-a381-4fbf-9809-3182dec09a85",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1220,
+      "overriden_lines": 0
+    }
+  }
+}
