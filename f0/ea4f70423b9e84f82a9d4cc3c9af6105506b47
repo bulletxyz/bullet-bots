@@ -1,0 +1,23 @@
+crates/strategies/funding-arb/src/strategy.rs
+  3fd75bfce390c251 47-53,62,513-680
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "f0ea4f70423b9e84f82a9d4cc3c9af6105506b47",
+  "prompts": {
+    "3fd75bfce390c251": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30814252-d4f7-48c3-9144-0662ef9c70c2",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 227,
+      "total_deletions": 52,
+      "accepted_lines": 531,
+      "overriden_lines": 0
+    }
+  }
+}
