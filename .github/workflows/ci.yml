@@ -38,7 +38,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace
-          save-if: ${{ github.ref == 'refs/heads/master' }}
       - run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
@@ -52,7 +51,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace
-          save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --locked --profile ci
       - run: cargo test --locked --doc
