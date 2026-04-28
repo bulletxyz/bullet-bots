@@ -89,4 +89,6 @@ pub use bus::EventBus;
 pub use event::Event;
 pub use feed::{EventFeed, EventTx, FeedContext, MpscFeed, NoSubscribers};
 pub use harness::Harness;
-pub use testing::{MarketDataReplayFeed, MockBroker, NullBroker, RecordedCall, ScriptedFeed};
+pub use testing::{
+    MarketDataReplayFeed, MockBroker, NullBroker, RecordedCall, ScriptedFeed, TimedFeed,
+};
