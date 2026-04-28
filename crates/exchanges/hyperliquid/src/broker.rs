@@ -2,29 +2,33 @@
 //!
 //! Meaningful fixes vs. the pre-harness adapter:
 //!
-//!   - `client_id` (string) is mapped to a deterministic `Uuid` via `Uuid::v5`
-//!     under a fixed namespace, so repeated calls for the same caller id
-//!     produce the same `cloid` and cancel-by-cloid works end-to-end.
-//!   - `bulk_order` response is parsed: `Resting { oid }` and `Filled { oid }`
-//!     are captured and returned in `OrderResult.order_id` so strategies can
-//!     track orders without waiting for a WS lifecycle update.
-//!   - `cancel_orders` now uses `bulk_cancel_by_cloid` when only a `client_id`
-//!     is present, lifting the old "dropped cancels" gotcha.
+//!   - `client_id` (string) is mapped to a deterministic `Uuid` via `Uuid::v5` under a fixed
+//!     namespace, so repeated calls for the same caller id produce the same `cloid` and
+//!     cancel-by-cloid works end-to-end.
+//!   - `bulk_order` response is parsed: `Resting { oid }` and `Filled { oid }` are captured and
+//!     returned in `OrderResult.order_id` so strategies can track orders without waiting for a WS
+//!     lifecycle update.
+//!   - `cancel_orders` now uses `bulk_cancel_by_cloid` when only a `client_id` is present, lifting
+//!     the old "dropped cancels" gotcha.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bb_core::broker::Broker;
 use bb_core::error::BotError;
 use bb_core::types::{
-    Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult, OrderStatus,
-    OrderType, Position, Side,
+    AmendOrder, Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult,
+    OrderStatus, OrderType, Position, Side,
 };
-use ethers::signers::LocalWallet;
 use ethers::types::H160;
 use hyperliquid_rust_sdk::{
-    ClientCancelRequest, ClientCancelRequestCloid, ClientLimit, ClientOrder, ClientOrderRequest,
-    ExchangeClient, ExchangeDataStatus, ExchangeResponseStatus, InfoClient,
+    ClientCancelRequest, ClientCancelRequestCloid, ClientLimit, ClientModifyRequest, ClientOrder,
+    ClientOrderRequest, ExchangeClient, ExchangeDataStatus, ExchangeResponseStatus, InfoClient,
 };
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
 
 use crate::convert;
@@ -37,66 +41,93 @@ fn client_id_to_cloid(client_id: &str) -> Uuid {
     Uuid::new_v5(&CLOID_NAMESPACE, client_id.as_bytes())
 }
 
+pub(crate) type ClientIdMap = Arc<RwLock<HashMap<String, String>>>;
+
+pub(crate) fn new_client_id_map() -> ClientIdMap {
+    Arc::new(RwLock::new(HashMap::new()))
+}
+
+pub(crate) fn register_client_id(map: &ClientIdMap, client_id: &str) -> Uuid {
+    let cloid = client_id_to_cloid(client_id);
+    let mut guard = map.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.insert(cloid.to_string(), client_id.to_string());
+    cloid
+}
+
+pub(crate) fn original_client_id(map: &ClientIdMap, cloid: &str) -> String {
+    let guard = map.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.get(cloid).cloned().unwrap_or_else(|| cloid.to_string())
+}
+
+/// Cross-thread health state shared with the WS muxer task. Mirrors the
+/// Bullet adapter — `reconcile_pending` flips on every WS reconnect (so
+/// strategies can resync immediately rather than wait for the periodic
+/// sweep), and `disconnected` flips once the SDK's reconnect loop exits.
+#[derive(Debug, Default)]
+pub(crate) struct ConnectionHealth {
+    pub reconcile_pending: AtomicBool,
+    pub disconnected: AtomicBool,
+}
+
 pub struct HyperliquidBroker {
     exchange: ExchangeClient,
     info: InfoClient,
     address: H160,
-    _wallet: LocalWallet,
+    health: Arc<ConnectionHealth>,
+    client_ids: ClientIdMap,
 }
 
 impl HyperliquidBroker {
     pub(crate) fn new(
         exchange: ExchangeClient,
         info: InfoClient,
-        wallet: LocalWallet,
         address: H160,
+        health: Arc<ConnectionHealth>,
+        client_ids: ClientIdMap,
     ) -> Self {
-        Self { exchange, info, address, _wallet: wallet }
+        Self { exchange, info, address, health, client_ids }
     }
 }
 
 #[async_trait]
 impl Broker for HyperliquidBroker {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "hyperliquid"
+    }
+
+    fn take_reconcile_signal(&self) -> bool {
+        self.health.reconcile_pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        self.health.disconnected.load(Ordering::Acquire)
     }
 
     async fn get_orderbook(&self, symbol: &str, _depth: usize) -> Result<OrderBook, BotError> {
         let coin = convert::to_hl_coin(symbol);
-        let resp = self
-            .info
-            .l2_snapshot(coin)
-            .await
-            .map_err(|e| BotError::exchange(e, true))?;
+        let resp = self.info.l2_snapshot(coin).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(convert::l2_snapshot_to_orderbook(&resp))
     }
 
     async fn get_balances(&self) -> Result<Vec<Balance>, BotError> {
-        let state = self
-            .info
-            .user_state(self.address)
-            .await
-            .map_err(|e| BotError::exchange(e, true))?;
+        let state =
+            self.info.user_state(self.address).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(convert::user_state_to_balances(&state))
     }
 
     async fn get_positions(&self) -> Result<Vec<Position>, BotError> {
-        let state = self
-            .info
-            .user_state(self.address)
-            .await
-            .map_err(|e| BotError::exchange(e, true))?;
+        let state =
+            self.info.user_state(self.address).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(convert::user_state_to_positions(&state))
     }
 
-    async fn get_open_orders(&self, _symbol: &str) -> Result<Vec<Order>, BotError> {
-        let resp = self
-            .info
-            .open_orders(self.address)
-            .await
-            .map_err(|e| BotError::exchange(e, true))?;
+    async fn get_open_orders(&self, symbol: &str) -> Result<Vec<Order>, BotError> {
+        let coin = convert::to_hl_coin(symbol);
+        let resp =
+            self.info.open_orders(self.address).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(resp
             .iter()
+            .filter(|o| o.coin == coin)
             .map(|o| {
                 let side = match o.side.as_str() {
                     "B" | "Buy" | "buy" => Side::Buy,
@@ -127,18 +158,23 @@ impl Broker for HyperliquidBroker {
 
         let requests: Vec<ClientOrderRequest> = orders
             .iter()
-            .map(|o| {
+            .map(|o| -> Result<ClientOrderRequest, BotError> {
                 let coin = convert::to_hl_coin(&o.symbol);
                 let tif = match o.order_type {
                     OrderType::Limit => "Gtc",
                     OrderType::PostOnly => "Alo",
                     OrderType::Market => "Ioc",
                 };
-                let price_f64 = o.price.to_string().parse::<f64>().unwrap_or(0.0);
-                let sz_f64 = o.quantity.to_string().parse::<f64>().unwrap_or(0.0);
-                let cloid = o.client_id.as_deref().map(client_id_to_cloid);
+                let price_f64 = o.price.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!("HL: cannot convert price {} to f64", o.price))
+                })?;
+                let sz_f64 = o.quantity.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!("HL: cannot convert quantity {} to f64", o.quantity))
+                })?;
+                let cloid =
+                    o.client_id.as_deref().map(|id| register_client_id(&self.client_ids, id));
 
-                ClientOrderRequest {
+                Ok(ClientOrderRequest {
                     asset: coin,
                     is_buy: o.side == Side::Buy,
                     reduce_only: o.reduce_only,
@@ -146,18 +182,21 @@ impl Broker for HyperliquidBroker {
                     sz: sz_f64,
                     cloid,
                     order_type: ClientOrder::Limit(ClientLimit { tif: tif.to_string() }),
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         match self.exchange.bulk_order(requests, None).await {
             Ok(response) => Ok(parse_bulk_order_response(&response, orders)),
             Err(e) => {
-                tracing::error!(error = %e, "HL bulk_order error");
+                // Tx may have actually committed even though the HTTP layer
+                // errored. Treat as outcome-unknown — strategies trust the WS
+                // user-data stream + periodic reconcile to surface the truth.
+                tracing::warn!(error = %e, "HL bulk_order errored — outcome unknown until WS confirms");
                 Ok(orders
                     .iter()
                     .map(|o| OrderResult {
-                        order_id: String::new(),
+                        order_id: None,
                         client_id: o.client_id.clone(),
                         success: false,
                         error: Some(e.to_string()),
@@ -167,10 +206,7 @@ impl Broker for HyperliquidBroker {
         }
     }
 
-    async fn cancel_orders(
-        &self,
-        cancels: &[CancelOrder],
-    ) -> Result<Vec<CancelResult>, BotError> {
+    async fn cancel_orders(&self, cancels: &[CancelOrder]) -> Result<Vec<CancelResult>, BotError> {
         if cancels.is_empty() {
             return Ok(vec![]);
         }
@@ -255,6 +291,116 @@ impl Broker for HyperliquidBroker {
             .collect())
     }
 
+    /// Native atomic amend via HL's `batch_modify` endpoint.
+    ///
+    /// Amends whose `cancel.order_id` parses as a `u64` are sent as a single
+    /// `bulk_modify` call (atomic on the venue side). Amends that only carry a
+    /// `client_id` fall back to cancel-then-place: HL's modify API requires a
+    /// numeric oid, and we cannot derive one from a cloid alone.
+    async fn amend_orders(&self, amends: &[AmendOrder]) -> Result<Vec<OrderResult>, BotError> {
+        if amends.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Partition into native-modify-eligible (have numeric oid) vs. fallback.
+        let mut modify_indices: Vec<usize> = Vec::new();
+        let mut modify_reqs: Vec<ClientModifyRequest> = Vec::new();
+        let mut fallback_indices: Vec<usize> = Vec::new();
+
+        for (i, amend) in amends.iter().enumerate() {
+            if let Ok(oid) = amend.cancel.order_id.parse::<u64>() {
+                let coin = convert::to_hl_coin(&amend.new_order.symbol);
+                let tif = match amend.new_order.order_type {
+                    OrderType::Limit => "Gtc",
+                    OrderType::PostOnly => "Alo",
+                    OrderType::Market => "Ioc",
+                };
+                let price_f64 = amend.new_order.price.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!(
+                        "HL amend: cannot convert price {} to f64",
+                        amend.new_order.price
+                    ))
+                })?;
+                let sz_f64 = amend.new_order.quantity.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!(
+                        "HL amend: cannot convert quantity {} to f64",
+                        amend.new_order.quantity
+                    ))
+                })?;
+                let cloid = amend
+                    .new_order
+                    .client_id
+                    .as_deref()
+                    .map(|id| register_client_id(&self.client_ids, id));
+                modify_reqs.push(ClientModifyRequest {
+                    oid,
+                    order: ClientOrderRequest {
+                        asset: coin,
+                        is_buy: amend.new_order.side == Side::Buy,
+                        reduce_only: amend.new_order.reduce_only,
+                        limit_px: price_f64,
+                        sz: sz_f64,
+                        cloid,
+                        order_type: ClientOrder::Limit(ClientLimit { tif: tif.to_string() }),
+                    },
+                });
+                modify_indices.push(i);
+            } else {
+                fallback_indices.push(i);
+            }
+        }
+
+        let mut results: Vec<Option<OrderResult>> = (0..amends.len()).map(|_| None).collect();
+
+        // Native bulk_modify for orders with numeric oids.
+        if !modify_reqs.is_empty() {
+            match self.exchange.bulk_modify(modify_reqs, None).await {
+                Ok(resp) => {
+                    for (pos, &orig_idx) in modify_indices.iter().enumerate() {
+                        results[orig_idx] = Some(parse_amend_result(&resp, pos, &amends[orig_idx]));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "HL bulk_modify errored — outcome unknown until WS confirms");
+                    for &orig_idx in &modify_indices {
+                        results[orig_idx] = Some(OrderResult {
+                            order_id: None,
+                            client_id: amends[orig_idx].new_order.client_id.clone(),
+                            success: false,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback cancel-then-place for orders without a parseable oid.
+        if !fallback_indices.is_empty() {
+            let fallback_cancels: Vec<CancelOrder> =
+                fallback_indices.iter().map(|&i| amends[i].cancel.clone()).collect();
+            let fallback_orders: Vec<NewOrder> =
+                fallback_indices.iter().map(|&i| amends[i].new_order.clone()).collect();
+            self.cancel_orders(&fallback_cancels).await?;
+            let place_results = self.place_orders(&fallback_orders).await?;
+            for (pos, &orig_idx) in fallback_indices.iter().enumerate() {
+                results[orig_idx] = Some(place_results[pos].clone());
+            }
+        }
+
+        Ok(results
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| {
+                r.unwrap_or(OrderResult {
+                    order_id: None,
+                    client_id: amends[i].new_order.client_id.clone(),
+                    success: false,
+                    error: Some("amend dropped: no oid or client_id".to_string()),
+                })
+            })
+            .collect())
+    }
+
     async fn cancel_all_orders(&self, symbol: &str) -> Result<(), BotError> {
         let open = self.get_open_orders(symbol).await?;
         if open.is_empty() {
@@ -273,6 +419,35 @@ impl Broker for HyperliquidBroker {
     }
 }
 
+/// Extract one `OrderResult` at position `pos` from a `bulk_modify` response.
+fn parse_amend_result(
+    resp: &ExchangeResponseStatus,
+    pos: usize,
+    amend: &AmendOrder,
+) -> OrderResult {
+    let client_id = amend.new_order.client_id.clone();
+    match resp {
+        ExchangeResponseStatus::Err(msg) => {
+            OrderResult { order_id: None, client_id, success: false, error: Some(msg.clone()) }
+        }
+        ExchangeResponseStatus::Ok(response) => {
+            let statuses = response.data.as_ref().map_or(&[][..], |d| d.statuses.as_slice());
+            let (oid, success, error) = match statuses.get(pos) {
+                Some(ExchangeDataStatus::Resting(r)) => (Some(r.oid.to_string()), true, None),
+                Some(ExchangeDataStatus::Filled(f)) => (Some(f.oid.to_string()), true, None),
+                Some(
+                    ExchangeDataStatus::Success
+                    | ExchangeDataStatus::WaitingForFill
+                    | ExchangeDataStatus::WaitingForTrigger,
+                ) => (None, true, None),
+                Some(ExchangeDataStatus::Error(msg)) => (None, false, Some(msg.clone())),
+                None => (None, false, Some("no status returned".to_string())),
+            };
+            OrderResult { order_id: oid, client_id, success, error }
+        }
+    }
+}
+
 fn parse_bulk_order_response(
     resp: &ExchangeResponseStatus,
     orders: &[NewOrder],
@@ -281,14 +456,14 @@ fn parse_bulk_order_response(
         ExchangeResponseStatus::Err(msg) => orders
             .iter()
             .map(|o| OrderResult {
-                order_id: String::new(),
+                order_id: None,
                 client_id: o.client_id.clone(),
                 success: false,
                 error: Some(msg.clone()),
             })
             .collect(),
         ExchangeResponseStatus::Ok(response) => {
-            let statuses = response.data.as_ref().map(|d| d.statuses.as_slice()).unwrap_or(&[]);
+            let statuses = response.data.as_ref().map_or(&[][..], |d| d.statuses.as_slice());
             if statuses.len() != orders.len() {
                 tracing::warn!(
                     sent = orders.len(),
@@ -301,24 +476,44 @@ fn parse_bulk_order_response(
                 .enumerate()
                 .map(|(i, o)| {
                     let (oid, success, error) = match statuses.get(i) {
-                        Some(ExchangeDataStatus::Resting(r)) => (r.oid.to_string(), true, None),
-                        Some(ExchangeDataStatus::Filled(f)) => (f.oid.to_string(), true, None),
-                        Some(ExchangeDataStatus::Success) => (String::new(), true, None),
-                        Some(ExchangeDataStatus::WaitingForFill) => (String::new(), true, None),
-                        Some(ExchangeDataStatus::WaitingForTrigger) => (String::new(), true, None),
-                        Some(ExchangeDataStatus::Error(msg)) => {
-                            (String::new(), false, Some(msg.clone()))
+                        Some(ExchangeDataStatus::Resting(r)) => {
+                            (Some(r.oid.to_string()), true, None)
                         }
-                        None => (String::new(), false, Some("no status returned".to_string())),
+                        Some(ExchangeDataStatus::Filled(f)) => {
+                            (Some(f.oid.to_string()), true, None)
+                        }
+                        Some(
+                            ExchangeDataStatus::Success
+                            | ExchangeDataStatus::WaitingForFill
+                            | ExchangeDataStatus::WaitingForTrigger,
+                        ) => (None, true, None),
+                        Some(ExchangeDataStatus::Error(msg)) => (None, false, Some(msg.clone())),
+                        None => (None, false, Some("no status returned".to_string())),
                     };
-                    OrderResult {
-                        order_id: oid,
-                        client_id: o.client_id.clone(),
-                        success,
-                        error,
-                    }
+                    OrderResult { order_id: oid, client_id: o.client_id.clone(), success, error }
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_id_map_round_trips_original_id() {
+        let ids = new_client_id_map();
+        let cloid = register_client_id(&ids, "42");
+
+        assert_eq!(original_client_id(&ids, &cloid.to_string()), "42");
+    }
+
+    #[test]
+    fn unknown_cloid_falls_back_to_uuid_string() {
+        let ids = new_client_id_map();
+        let cloid = Uuid::nil().to_string();
+
+        assert_eq!(original_client_id(&ids, &cloid), cloid);
     }
 }

@@ -322,9 +322,43 @@ fn drift_moves_toward_mid() {
 ```
 
 For end-to-end tests of the actor itself, wire it into a `HarnessBuilder` with
-a test feed that emits scripted events. A `ScriptedFeed<E>` helper in
-`bb-core::harness::testing` is a planned addition; for now, implement the
-trait inline in your test module.
+`ScriptedFeed` and `MockBroker` from `bb-core::harness::testing`:
+
+```rust
+#[tokio::test(flavor = "current_thread")]
+async fn entry_fires_on_dip() {
+    use bb_core::harness::{ActorSpec, HarnessBuilder, MockBroker, ScriptedFeed};
+    use bb_core::events::{BookUpdate, Trade};
+
+    let broker = MockBroker::shared("bullet");
+    let actor = DipBuyerActor::new(/* config with dip_pct = 1.5 */);
+
+    // Build a scripted book feed: price drops enough to trigger entry.
+    let books = ScriptedFeed::new(vec![
+        book_at(100_00), // seed reference price
+        book_at(98_400), // -1.6% → triggers entry
+        book_at(98_400), // padding so harness drains
+    ]);
+
+    let harness = HarnessBuilder::new()
+        .wire_broker("bullet", Arc::clone(&broker) as Arc<dyn bb_core::broker::Broker>)
+        .wire_feed_named("books", books)
+        .wire_actor(ActorSpec::new("dip", actor).sub::<BookUpdate>().sub::<Trade>())
+        .build()
+        .unwrap();
+
+    harness.run().await.unwrap();
+
+    assert_eq!(broker.placed_count().await, 1);
+    let orders = broker.last_placed_orders().await;
+    assert_eq!(orders[0].side, Side::Buy);
+}
+```
+
+`ScriptedFeed` yields between each event so handler tasks are scheduled before
+the next event arrives — without this, tests that assert on intermediate state
+would be structurally flaky. See the reference-arb and funding-arb strategy
+tests for more complex multi-feed / multi-state-transition examples.
 
 ## Canonical-source rule (important)
 

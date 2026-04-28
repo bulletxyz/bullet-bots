@@ -11,6 +11,7 @@ pub enum Side {
 }
 
 impl Side {
+    #[must_use]
     pub fn opposite(self) -> Self {
         match self {
             Side::Buy => Side::Sell,
@@ -92,7 +93,7 @@ impl OrderBook {
         }
     }
 
-    /// Would a PostOnly order at (`side`, `price`) cross the top of book?
+    /// Would a `PostOnly` order at (`side`, `price`) cross the top of book?
     ///
     /// Returns `true` when a venue would reject the order as in-cross —
     /// buys at or above the best ask, sells at or below the best bid. When
@@ -131,6 +132,12 @@ pub struct NewOrder {
 }
 
 #[derive(Debug, Clone)]
+pub struct AmendOrder {
+    pub cancel: CancelOrder,
+    pub new_order: NewOrder,
+}
+
+#[derive(Debug, Clone)]
 pub struct CancelOrder {
     pub symbol: String,
     pub order_id: String,
@@ -142,7 +149,11 @@ pub struct CancelOrder {
 
 #[derive(Debug, Clone)]
 pub struct OrderResult {
-    pub order_id: String,
+    /// Venue-assigned order ID when placement is confirmed synchronously.
+    /// `None` means the outcome is unknown — listen on the lifecycle stream.
+    /// Bullet does not return an oid synchronously (orders are submitted as
+    /// blockchain transactions); Hyperliquid does.
+    pub order_id: Option<String>,
     pub client_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,

@@ -15,10 +15,20 @@ impl ClientIdIssuer {
 
     /// Start the sequence past a known high-water mark. The next `issue()`
     /// returns `start.max(1)`. Useful for crash recovery: on restart,
-    /// resume past the last client_id the venue might still have live so
+    /// resume past the last `client_id` the venue might still have live so
     /// fresh orders don't collide with stale ones.
     pub fn starting_at(start: u64) -> Self {
         Self { next: start.max(1) }
+    }
+
+    /// Seed the sequence from the current Unix epoch so that IDs issued in
+    /// different process restarts don't collide. Each second of wall time gives
+    /// 10 000 unique IDs before wrapping into the next second's range.
+    pub fn session_seeded() -> Self {
+        let epoch_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        Self::starting_at(epoch_secs * 10_000)
     }
 
     pub fn issue(&mut self) -> String {

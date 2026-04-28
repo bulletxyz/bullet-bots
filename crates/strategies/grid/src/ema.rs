@@ -36,10 +36,13 @@ impl Ema {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
-    use super::*;
     use std::time::Duration;
 
+    use super::*;
+
+    #[allow(clippy::float_cmp)]
     #[test]
     fn seed_and_converge() {
         let t0 = Instant::now();
@@ -47,11 +50,11 @@ mod tests {
         assert_eq!(ema.update(100.0, t0), 100.0);
 
         // Step up to 200; after 1 tau (~60s) we're ~63% of the way.
-        let v = ema.update(200.0, t0 + Duration::from_secs(60));
+        let v = ema.update(200.0, t0 + Duration::from_mins(1));
         assert!(v > 160.0 && v < 165.0, "expected ~163, got {v}");
 
         // After a long time relative to tau, should be very close to 200.
-        let v = ema.update(200.0, t0 + Duration::from_secs(600));
+        let v = ema.update(200.0, t0 + Duration::from_mins(10));
         assert!((v - 200.0).abs() < 0.5, "expected ~200, got {v}");
     }
 

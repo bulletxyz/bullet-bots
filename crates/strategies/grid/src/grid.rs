@@ -5,12 +5,11 @@
 //! Invariants:
 //!   - Level prices are set once in [`compute_levels`] and never move.
 //!   - At any time, at most one of {buy, sell} rests at a given level.
-//!   - `Dormant` = the level has no resting order. It becomes `Pending` when
-//!     the *adjacent* level fills ("a buy at N fills → re-arm level N+1 as a
-//!     sell" and symmetric) or, for a freshly computed grid, when the actor
-//!     first populates levels from config at startup.
-//!   - Profit per round trip = `spacing × order_size`; the actor's
-//!     `InventoryTracker` records it on each fill cycle.
+//!   - `Dormant` = the level has no resting order. It becomes `Pending` when the *adjacent* level
+//!     fills ("a buy at N fills → re-arm level N+1 as a sell" and symmetric) or, for a freshly
+//!     computed grid, when the actor first populates levels from config at startup.
+//!   - Profit per round trip = `spacing × order_size`; the actor's `InventoryTracker` records it on
+//!     each fill cycle.
 
 use std::time::Instant;
 
@@ -91,6 +90,8 @@ impl GridState {
     }
 
     /// Enable trend-filter EMAs at construction time.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn with_trend_filter(mut self, cfg: &TrendFilterConfig) -> Self {
         self.fast_ema = Some(Ema::new(cfg.fast_secs as f64));
         self.slow_ema = Some(Ema::new(cfg.slow_secs as f64));
@@ -115,11 +116,7 @@ impl GridState {
 
     /// Find the level that matches an incoming fill. Falls back from
     /// `client_id` to `order_id` since Bullet doesn't return oids synchronously.
-    pub fn find_fill_target(
-        &mut self,
-        client_id: Option<&str>,
-        order_id: &str,
-    ) -> Option<usize> {
+    pub fn find_fill_target(&mut self, client_id: Option<&str>, order_id: &str) -> Option<usize> {
         self.levels.iter().position(|l| {
             if l.state != LevelState::Active {
                 return false;
@@ -186,6 +183,7 @@ impl GridState {
     /// Update trend-filter EMAs from a fresh mid observation and return the
     /// current `(divergence_bps, paused)`. Noop / returns `(0, paused)` when
     /// the filter isn't configured.
+    #[allow(clippy::cast_precision_loss)]
     pub fn update_trend_filter(
         &mut self,
         mid: Decimal,
@@ -212,12 +210,16 @@ impl GridState {
         self.levels.iter().filter(|l| l.state == LevelState::Active).count()
     }
 
+    pub fn active_remaining(&self, side: Side, order_size: Decimal) -> Decimal {
+        self.levels
+            .iter()
+            .filter(|l| l.state == LevelState::Active && l.side == Some(side))
+            .map(|l| (order_size - l.filled_qty).max(Decimal::ZERO))
+            .sum()
+    }
+
     /// Check if a new order on `side` would push past `max_position`.
-    pub fn at_max_position(
-        net_position: Decimal,
-        side: Side,
-        max_position: Decimal,
-    ) -> bool {
+    pub fn at_max_position(net_position: Decimal, side: Side, max_position: Decimal) -> bool {
         match side {
             Side::Buy => net_position >= max_position,
             Side::Sell => net_position <= -max_position,
@@ -233,6 +235,7 @@ impl GridState {
             l.side = None;
             l.client_id = None;
             l.order_id = None;
+            l.filled_qty = Decimal::ZERO;
         }
     }
 
@@ -253,8 +256,9 @@ impl GridState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bb_core::types::OrderType;
+
+    use super::*;
 
     fn cfg(lower: i64, upper: i64, n: usize) -> GridConfig {
         GridConfig {
@@ -318,10 +322,7 @@ mod tests {
         s.levels[5].side = Some(Side::Buy);
         s.levels[6].state = LevelState::Dormant;
         s.levels[6].side = None;
-        assert_eq!(
-            full_fill(&mut s, 5),
-            FillOutcome::Complete { rearm: Some((6, Side::Sell)) }
-        );
+        assert_eq!(full_fill(&mut s, 5), FillOutcome::Complete { rearm: Some((6, Side::Sell)) });
         assert_eq!(s.levels[5].state, LevelState::Dormant);
         assert_eq!(s.levels[5].side, None);
         assert_eq!(s.levels[6].state, LevelState::Pending);
@@ -337,10 +338,7 @@ mod tests {
         s.levels[7].side = Some(Side::Sell);
         s.levels[6].state = LevelState::Dormant;
         s.levels[6].side = None;
-        assert_eq!(
-            full_fill(&mut s, 7),
-            FillOutcome::Complete { rearm: Some((6, Side::Buy)) }
-        );
+        assert_eq!(full_fill(&mut s, 7), FillOutcome::Complete { rearm: Some((6, Side::Buy)) });
     }
 
     #[test]
@@ -405,10 +403,7 @@ mod tests {
         assert_eq!(full_fill(&mut s, 1), FillOutcome::Complete { rearm: None });
         assert_eq!(s.levels[1].state, LevelState::Dormant);
         // Sell at 76 fills → level 1 is now Dormant, re-arm lands as Buy.
-        assert_eq!(
-            full_fill(&mut s, 2),
-            FillOutcome::Complete { rearm: Some((1, Side::Buy)) }
-        );
+        assert_eq!(full_fill(&mut s, 2), FillOutcome::Complete { rearm: Some((1, Side::Buy)) });
         assert_eq!(s.levels[1].state, LevelState::Pending);
         assert_eq!(s.levels[1].side, Some(Side::Buy));
     }
@@ -425,9 +420,14 @@ mod tests {
         let c = cfg(70, 80, 11);
         s.compute_levels(Decimal::from(75), &c);
         s.levels[3].state = LevelState::Active;
+        s.levels[3].filled_qty = Decimal::new(5, 1); // partial fill
         s.suspend_all();
         assert!(s.paused);
         assert!(s.levels.iter().all(|l| l.state == LevelState::Dormant));
+        assert!(
+            s.levels.iter().all(|l| l.filled_qty.is_zero()),
+            "suspend_all must reset filled_qty"
+        );
     }
 
     #[test]

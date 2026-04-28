@@ -9,10 +9,21 @@ and multi-source event dispatch.
 
 ```sh
 cargo build                # full workspace
-cargo test                 # all unit tests
+cargo nextest run          # unit + integration tests (default runner)
+cargo test --doc           # doctests only (nextest doesn't run these)
 cargo clippy               # lints (pedantic enabled)
 cargo +nightly fmt         # format (nightly required for import grouping)
 ```
+
+First-time setup:
+
+```sh
+cargo install cargo-nextest --locked
+```
+
+The nextest config lives at `.config/nextest.toml`. CI should use the `ci`
+profile (`cargo nextest run --profile ci`) which retries once and doesn't
+fail-fast.
 
 Validate a config without connecting:
 
@@ -20,11 +31,25 @@ Validate a config without connecting:
 cargo run --bin bb-bot -- validate --config config/grid-example.toml
 ```
 
-Run a bot:
+Generate a keypair (first time):
 
 ```sh
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+cargo run --bin bb-bot -- keygen --network testnet
+# → writes ~/.config/bullet/id.json (0600), prints address + faucet curl
+```
+
+Run a bot (default: reads `~/.config/bullet/id.json`):
+
+```sh
 cargo run --bin bb-bot -- run --config config/grid-example.toml
+```
+
+Or point at an explicit keystore / use hex for CI:
+
+```sh
+export BB_BULLET_KEY_FILE="/path/to/keystore.json"   # preferred
+# OR
+export BB_BULLET_PRIVATE_KEY_HEX="0x..."             # fallback
 ```
 
 ## Architecture — the harness, feeds, and actors
@@ -182,12 +207,14 @@ crates/
   bb-core/
     src/
       harness/        Harness + traits: Event, EventFeed, Actor, EventHandler;
-                      status.rs (HTTP API), testing.rs (ScriptedFeed + NullBroker)
+                      status.rs (HTTP API), testing.rs (ScriptedFeed, MockBroker,
+                      MarketDataReplayFeed)
       helpers/        InventoryTracker, ClientIdIssuer, TickFeed
       broker.rs       Broker trait + BrokerRegistry (REST side)
       events.rs       Canonical event types
       types.rs        Shared value types (Order, OrderBook, Side, ...)
       error.rs        BotError
+      clock.rs        Clock trait (SystemClock + TestClock for deterministic tests)
   bb-bot/             CLI binary
   exchanges/
     bullet/           Bullet DEX adapter
@@ -198,14 +225,23 @@ crates/
     hyperliquid/      Hyperliquid adapter — same shape as Bullet; subscribes
                       to ActiveAssetCtx so `MarkPriceUpdate.funding_rate` is
                       real (not hardcoded zero)
+    binance/          Binance reference-price feed (read-only, no broker)
   strategies/
     grid/                Static grid — fixed-range, anchor-biased
     avellaneda-stoikov/  A-S market maker — actor
     funding-arb/         Cross-venue funding arb — actor
+    reference-arb/       Reference-price arb vs Binance perp microprice
 config/
   grid-example.toml
   avellaneda-stoikov-example.toml
   funding-arb-example.toml
+  reference-arb-example.toml
+docs/
+  ARCHITECTURE.md              Component diagram + event flow
+  CONTRIBUTING-EXCHANGES.md   How to add a new adapter
+  strategies/
+    grid-design-notes.md
+    grid-future-work.md
 ```
 
 ## Adding a Strategy
@@ -222,17 +258,22 @@ For the harness path:
    - `broker.rs` — implements `bb_core::broker::Broker` for REST.
    - `convert.rs` — value conversions.
    - `config.rs` — adapter-specific config (TOML-derived).
-2. Implement each `EventFeed<E>` by wrapping the typed receiver (the
-   `feed_impl!` macro in Bullet's `connection.rs` is a tidy pattern).
+2. Implement each `EventFeed<E>` by returning an `MpscFeed<E>` from
+   `connect_<name>`. See `crates/exchanges/bullet/src/connection.rs` for the
+   reference pattern — the muxer task writes to `mpsc::Sender<E>` channels
+   and `MpscFeed::new(rx)` wraps each receiver.
 3. In `bb-bot/src/main.rs`, add a match arm that calls
    `connect_<name>(&config, &symbol)` and wires the broker + feeds into the
    harness.
 
-The Bullet adapter is the reference; each piece is ~100 lines.
+The Bullet adapter is the reference. Each piece has a single responsibility:
+subscribe, broker, convert, config. See `docs/CONTRIBUTING-EXCHANGES.md` for
+the full walkthrough including reconnect patterns and the `Trade` /
+`OrderLifecycle` canonical-source invariant.
 
 ## Exchange-Specific Notes
 
-**Bullet**: `bullet-rust-sdk` (local path dep). Ed25519 keys.
+**Bullet**: `bullet-rust-sdk` from the public Bullet GitHub repo. Ed25519 keys.
 `ManagedWebsocket` provides internal reconnection — the harness only sees
 `Disconnected` on terminal give-up. Symbol format: `"BTC-USD"`.
 
@@ -247,8 +288,11 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 `[strategy.<type>]`, `[logging]`.
 
 - `[engine]` — `tick_interval_ms`, `status_port` (optional). `symbol` lives inside each `[strategy.<name>]` section so multi-symbol setups are explicit.
-- Exchange configs: `type = "<name>"` + adapter-specific fields. Private keys
-  via env vars (`BB_BULLET_PRIVATE_KEY_HEX`, `BB_HYPERLIQUID_PRIVATE_KEY_HEX`).
+- Exchange configs: `type = "<name>"` + adapter-specific fields. Bullet
+  resolves key material in this order: `key_file` (in config) → env
+  `BB_BULLET_KEY_FILE` → env `BB_BULLET_PRIVATE_KEY_HEX` → `private_key_hex`
+  (in config). File-based keystore is preferred — see `bb-bot keygen`.
+  Hyperliquid keys via `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style
@@ -277,10 +321,20 @@ slow handler never blocks the endpoint.
 
 `bb-core::harness::testing` provides:
 
-- `ScriptedFeed<E>` — emits a preset list of events on a configurable delay,
-  then exits. Wire it into a `HarnessBuilder` like any other feed.
-- `NullBroker` — no-op broker that records the sequence of calls (placed
-  orders, cancels) for assertion in tests.
+- `ScriptedFeed<E>` — emits a preset list of events, yielding between each so
+  subscription tasks have a chance to process before the next event arrives.
+  Then exits, causing the harness to shut down cleanly.
+- `MarketDataReplayFeed<E>` — like `ScriptedFeed` but each event carries a
+  `unix_ms` timestamp; the feed advances a `TestClock` before each send so
+  strategies calling `cx.clock().unix_ms()` see deterministic event-driven time.
+- `MockBroker` — records all broker calls and returns pre-queued responses.
+  Inspect calls via `history()`, `placed_count()`, `last_placed_orders()`;
+  queue responses via `queue_place_response(Ok(()))` / `queue_place_response(Err(e))`.
+  `NullBroker` is kept as a type alias for backward compatibility.
 
-See `crates/strategies/grid/src/strategy.rs` (`integration_tests` module) for
-a worked example.
+`TestClock` (in `bb-core::clock`) pairs with `MarketDataReplayFeed` and can
+be injected via `HarnessBuilder::with_clock(Arc::new(clock))`.
+
+See `crates/strategies/grid/src/strategy.rs` (`integration_tests` module) and
+`crates/strategies/reference-arb/src/strategy.rs` (`tests` module) for worked
+examples that drive the full state machine using `ScriptedFeed` + `MockBroker`.

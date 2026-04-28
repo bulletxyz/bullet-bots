@@ -17,16 +17,17 @@ version = "0.1.0"
 # Core
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 thiserror = "2"
+secrecy = { version = "0.8", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
-rand = "0.8"
 clap = { version = "4", features = ["derive"] }
 axum = "0.8"
 
@@ -34,13 +35,14 @@ axum = "0.8"
 bb-core = { path = "crates/bb-core" }
 bb-exchange-bullet = { path = "crates/exchanges/bullet" }
 bb-exchange-hyperliquid = { path = "crates/exchanges/hyperliquid" }
+bb-exchange-binance = { path = "crates/exchanges/binance" }
 bb-strategy-grid = { path = "crates/strategies/grid" }
 bb-strategy-funding-arb = { path = "crates/strategies/funding-arb" }
 bb-strategy-avellaneda-stoikov = { path = "crates/strategies/avellaneda-stoikov" }
+bb-strategy-reference-arb = { path = "crates/strategies/reference-arb" }
 
 # Bullet SDK
-# For release: bullet-rust-sdk = { git = "https://github.com/bulletxyz/bullet-rust-sdk.git", rev = "..." }
-bullet-rust-sdk = { path = "../bullet-rust-sdk/rust", default-features = false }
+bullet-rust-sdk = { git = "https://github.com/bulletxyz/bullet-rust-sdk.git", default-features = false }
 
 # Hyperliquid SDK
 hyperliquid_rust_sdk = "0.6"
@@ -61,6 +63,16 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_precision_loss = "allow"
+# Reliability: no silent panics in live trading code
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 1

@@ -5,11 +5,14 @@
 //! `run()`. Everything generic lives in these two traits' impls so the user's
 //! wiring code stays typed.
 
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +22,7 @@ use super::event::Event;
 use super::feed::{EventFeed, EventTx, FeedContext};
 use super::harness::{ActorHandle, Harness};
 use crate::broker::{Broker, BrokerRegistry};
+use crate::clock::{Clock, SystemClock};
 use crate::error::BotError;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -55,7 +59,7 @@ where
     ) -> JoinHandle<Result<(), BotError>> {
         let tx = EventTx::new(bus.sender::<E>());
         let ctx = FeedContext::new(cancel);
-        let feed = self.feed.take().expect("feed consumed twice");
+        let feed = self.feed.take().unwrap_or_else(|| unreachable!("feed entry consumed twice"));
         tokio::spawn(async move { feed.run(tx, ctx).await })
     }
 }
@@ -67,7 +71,9 @@ pub(super) trait ActorSpawn: Send {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
+        clock: Arc<dyn Clock>,
         shutdown: CancellationToken,
+        actor_failures: mpsc::UnboundedSender<WindDownReason>,
     ) -> ActorHandle;
 }
 
@@ -81,23 +87,36 @@ pub struct ActorSpec<A: Actor> {
 
 impl<A: Actor> ActorSpec<A> {
     pub fn new(name: impl Into<Arc<str>>, actor: A) -> Self {
-        Self {
-            name: name.into(),
-            actor: Arc::new(Mutex::new(actor)),
-            subscriptions: Vec::new(),
-        }
+        Self { name: name.into(), actor: Arc::new(Mutex::new(actor)), subscriptions: Vec::new() }
     }
 
     /// Subscribe this actor to events of type `E`. Requires the actor to
     /// implement `EventHandler<E>`. Each subscription becomes its own task at
     /// run time, guarded by a per-actor mutex so handler calls never overlap.
+    ///
+    /// Use [`sub_critical`] for loss-sensitive events (`Trade`,
+    /// `OrderLifecycle`) where a lagged subscriber is a correctness error.
     #[must_use]
     pub fn sub<E>(mut self) -> Self
     where
         A: EventHandler<E>,
         E: Event,
     {
-        self.subscriptions.push(SubscriptionFactory::new::<E>());
+        self.subscriptions.push(SubscriptionFactory::new::<E>(false));
+        self
+    }
+
+    /// Like [`sub`], but treats a lagged event stream as fatal: the harness
+    /// will shut down if the actor falls behind on this event type. Use for
+    /// `Trade` and `OrderLifecycle` subscriptions — a missed fill or lifecycle
+    /// update leaves position tracking permanently wrong.
+    #[must_use]
+    pub fn sub_critical<E>(mut self) -> Self
+    where
+        A: EventHandler<E>,
+        E: Event,
+    {
+        self.subscriptions.push(SubscriptionFactory::new::<E>(true));
         self
     }
 }
@@ -113,13 +132,14 @@ struct SubscriptionFactory<A: Actor> {
                 &EventBus,
                 Arc<ActorContext>,
                 CancellationToken,
+                mpsc::UnboundedSender<WindDownReason>,
             ) -> JoinHandle<()>
             + Send,
     >,
 }
 
 impl<A: Actor> SubscriptionFactory<A> {
-    fn new<E>() -> Self
+    fn new<E>(fatal_on_lag: bool) -> Self
     where
         A: EventHandler<E>,
         E: Event,
@@ -128,13 +148,14 @@ impl<A: Actor> SubscriptionFactory<A> {
             move |actor: Arc<Mutex<A>>,
                   bus: &EventBus,
                   ctx: Arc<ActorContext>,
-                  cancel: CancellationToken| {
+                  cancel: CancellationToken,
+                  actor_failures: mpsc::UnboundedSender<WindDownReason>| {
                 let mut rx = bus.subscribe::<E>();
                 tokio::spawn(async move {
                     loop {
                         tokio::select! {
                             biased;
-                            _ = cancel.cancelled() => break,
+                            () = cancel.cancelled() => break,
                             recv = rx.recv() => match recv {
                                 Ok(event) => {
                                     let mut guard = actor.lock().await;
@@ -157,12 +178,31 @@ impl<A: Actor> SubscriptionFactory<A> {
                                             );
                                         }
                                         if e.is_fatal() {
+                                            let _ = actor_failures.send(WindDownReason::ActorFailed {
+                                                actor: ctx.actor_name().to_string(),
+                                                error: e.to_string(),
+                                            });
                                             ctx.request_shutdown();
                                             break;
                                         }
                                     }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                    if fatal_on_lag {
+                                        tracing::error!(
+                                            actor = ctx.actor_name(),
+                                            lagged = n,
+                                            "actor lagged on critical event stream — shutting down"
+                                        );
+                                        let _ = actor_failures.send(WindDownReason::ActorFailed {
+                                            actor: ctx.actor_name().to_string(),
+                                            error: format!(
+                                                "lagged on critical event stream by {n} messages"
+                                            ),
+                                        });
+                                        ctx.request_shutdown();
+                                        break;
+                                    }
                                     tracing::warn!(
                                         actor = ctx.actor_name(),
                                         lagged = n,
@@ -189,9 +229,11 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
         self: Box<Self>,
         bus: &EventBus,
         brokers: Arc<BrokerRegistry>,
+        clock: Arc<dyn Clock>,
         shutdown: CancellationToken,
+        actor_failures: mpsc::UnboundedSender<WindDownReason>,
     ) -> ActorHandle {
-        let ctx = Arc::new(ActorContext::new(self.name.clone(), brokers, shutdown));
+        let ctx = Arc::new(ActorContext::with_clock(self.name.clone(), brokers, clock, shutdown));
         let name = self.name.clone();
         let actor = self.actor;
 
@@ -203,15 +245,13 @@ impl<A: Actor> ActorSpawn for ActorSpec<A> {
                 bus,
                 Arc::clone(&ctx),
                 sub_cancel.clone(),
+                actor_failures.clone(),
             ));
         }
 
-        // `init`/`wind_down` drivers. We store the actor Arc + ctx here so the
-        // harness can call into them at the right points — `init` before any
-        // event reaches the subscription tasks (we can't strictly enforce
-        // that ordering with broadcast channels; callers should publish
-        // after `harness.run()` is awaited), `wind_down` after subscription
-        // tasks have ended.
+        // `init`/`wind_down` drivers. The harness calls `init` before spawning
+        // feeds (so the actor is ready before any event arrives) and `wind_down`
+        // after all subscription tasks have drained.
         let actor_init = Arc::clone(&actor);
         let ctx_init = Arc::clone(&ctx);
         let init_fn: BoxInit = Box::new(move || {
@@ -256,13 +296,28 @@ pub(super) type BoxWindDown =
 pub(super) type BoxStatus = Arc<dyn Fn() -> serde_json::Value + Send + Sync>;
 
 /// Builder for a [`Harness`].
-#[derive(Default)]
 pub struct HarnessBuilder {
     feeds: Vec<Box<dyn FeedSpawn>>,
     actors: Vec<Box<dyn ActorSpawn>>,
     brokers: Vec<(Arc<str>, Arc<dyn Broker>)>,
     enable_signal: bool,
-    status_port: Option<u16>,
+    status_bind: Option<SocketAddr>,
+    event_capacities: HashMap<TypeId, usize>,
+    clock: Arc<dyn Clock>,
+}
+
+impl Default for HarnessBuilder {
+    fn default() -> Self {
+        Self {
+            feeds: Vec::new(),
+            actors: Vec::new(),
+            brokers: Vec::new(),
+            enable_signal: false,
+            status_bind: None,
+            event_capacities: HashMap::new(),
+            clock: Arc::new(SystemClock),
+        }
+    }
 }
 
 impl HarnessBuilder {
@@ -277,22 +332,52 @@ impl HarnessBuilder {
         self
     }
 
-    /// Enable the HTTP status API on the given port. `None` disables it.
-    /// `/status` returns each actor's JSON snapshot keyed by name.
+    /// Enable the HTTP status API on the given port, bound to `127.0.0.1`.
+    /// `None` disables it. Use [`with_status_bind`] to bind to a different
+    /// address (e.g. `0.0.0.0` for remote access, with appropriate firewall
+    /// rules — the endpoint exposes positions and `PnL`).
     #[must_use]
     pub fn with_status_port(mut self, port: Option<u16>) -> Self {
-        self.status_port = port;
+        self.status_bind = port.map(|p| SocketAddr::from(([127, 0, 0, 1], p)));
+        self
+    }
+
+    /// Enable the HTTP status API on an explicit bind address.
+    #[must_use]
+    pub fn with_status_bind(mut self, addr: SocketAddr) -> Self {
+        self.status_bind = Some(addr);
+        self
+    }
+
+    /// Override the clock used by all actors' [`ActorContext`]. Defaults to
+    /// [`SystemClock`]. Inject a [`TestClock`] to write deterministic tests
+    /// where time can be advanced programmatically instead of sleeping.
+    ///
+    /// [`TestClock`]: crate::clock::TestClock
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Override the broadcast channel capacity for a specific event type.
+    ///
+    /// Use this for high-frequency events where the default 1024-message
+    /// buffer is too small. Example: `BookUpdate` on a fast venue may burst
+    /// many ticks per second; set it to 8192 so slow actors don't lag.
+    ///
+    /// Calls after the bus is built have no effect — set capacities before
+    /// any wiring calls.
+    #[must_use]
+    pub fn with_event_capacity<E: Event>(mut self, n: usize) -> Self {
+        self.event_capacities.insert(TypeId::of::<E>(), n);
         self
     }
 
     /// Register a broker (REST/order-placement handle) under a name.
     /// Actors look it up via `cx.brokers().get("<name>")`.
     #[must_use]
-    pub fn wire_broker(
-        mut self,
-        name: impl Into<Arc<str>>,
-        broker: Arc<dyn Broker>,
-    ) -> Self {
+    pub fn wire_broker(mut self, name: impl Into<Arc<str>>, broker: Arc<dyn Broker>) -> Self {
         self.brokers.push((name.into(), broker));
         self
     }
@@ -327,12 +412,15 @@ impl HarnessBuilder {
         for (name, broker) in self.brokers {
             registry.insert(name, broker)?;
         }
+        let bus = EventBus::with_capacities(self.event_capacities);
         Ok(Harness::new(
             self.feeds,
             self.actors,
             Arc::new(registry),
+            bus,
+            self.clock,
             self.enable_signal,
-            self.status_port,
+            self.status_bind,
         ))
     }
 }

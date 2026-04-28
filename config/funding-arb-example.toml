@@ -8,14 +8,15 @@ status_port = 3031
 [exchanges.bullet]
 type = "bullet"
 network = "testnet"
-# Set via environment: export BB_BULLET_PRIVATE_KEY_HEX="0x..."
-private_key_hex = ""
+# Key material — do NOT put private keys in this file.
+# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
+# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY_HEX="0x..."
 
 [exchanges.hyperliquid]
 type = "hyperliquid"
 network = "testnet"
-# Set via environment: export BB_HYPERLIQUID_PRIVATE_KEY_HEX="0x..."
-private_key_hex = ""
+# Key material — do NOT put private keys in this file.
+# export BB_HYPERLIQUID_PRIVATE_KEY_HEX="0x..."
 
 [strategy]
 type = "funding-arb"
@@ -27,7 +28,6 @@ exchange_b = "hyperliquid"
 entry_threshold = "0.0005"          # 0.05%/hr (~43% APR)
 exit_threshold = "0.0001"           # 0.01%/hr (~8.7% APR)
 order_size = "0.01"                 # BTC per leg
-max_notional_usd = "10000"
 max_delta_imbalance = "0.005"       # emergency flatten if net delta > 0.005 BTC
 max_funding_rate = "0.005"          # reject rates > 0.5%/hr (anomalous)
 order_mode = "aggressive"           # IoC at best opposing + slippage

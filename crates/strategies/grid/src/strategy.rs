@@ -2,12 +2,11 @@
 //!
 //! Subscribed events:
 //!   - `BookUpdate` — cache mid / book for the initial anchor + trend filter.
-//!   - `Trade` — canonical source of inventory / PnL. On fill, marks the
-//!     level dormant and re-arms the adjacent level with the opposite side.
-//!   - `OrderLifecycle` — learn exchange order_ids; mark cancel/reject
-//!     levels Pending so the tick re-places them.
-//!   - `Tick` — trend-filter evaluation, missing-order reconcile,
-//!     place-pendings.
+//!   - `Trade` — canonical source of inventory / `PnL`. On fill, marks the level dormant and
+//!     re-arms the adjacent level with the opposite side.
+//!   - `OrderLifecycle` — learn exchange `order_ids`; mark cancel/reject levels Pending so the tick
+//!     re-places them.
+//!   - `Tick` — trend-filter evaluation, missing-order reconcile, place-pendings.
 //!
 //! No rebalancing: levels are fixed at startup. No dynamic re-centering, no
 //! drift threshold, no inventory skew. The grid's bias is expressed by the
@@ -47,7 +46,7 @@ impl GridActor {
             config,
             state,
             inventory: InventoryTracker::new(),
-            client_ids: ClientIdIssuer::new(),
+            client_ids: ClientIdIssuer::session_seeded(),
             book: None,
             anchor: Decimal::ZERO,
         }
@@ -60,7 +59,6 @@ impl GridActor {
     fn symbol(&self) -> &str {
         &self.config.symbol
     }
-
 
     /// Refuse to start if the per-level spacing can't cover round-trip
     /// maker fees by the configured multiplier.
@@ -98,17 +96,22 @@ impl GridActor {
     }
 
     /// Place every `Pending` level, skipping sides at `max_position` or
-    /// levels that would cross the cached book under PostOnly.
+    /// levels that would cross the cached book under `PostOnly`.
+    #[allow(clippy::too_many_lines)]
     async fn place_pending_orders(&mut self, cx: &ActorContext) -> Result<(), BotError> {
         let broker = cx.broker(self.exchange())?;
         let order_type = self.config.order_type;
         let order_size = self.config.order_size;
         let max_position = self.config.max_position;
         let net_position = self.inventory.net_position;
+        let mut projected_long = net_position + self.state.active_remaining(Side::Buy, order_size);
+        let mut projected_short =
+            net_position - self.state.active_remaining(Side::Sell, order_size);
 
         let mut orders: Vec<NewOrder> = Vec::new();
         let mut target_cids: Vec<String> = Vec::new();
         let mut skipped_crossed = 0usize;
+        let mut skipped_exposure = 0usize;
 
         for idx in 0..self.state.levels.len() {
             let (side, price) = {
@@ -120,15 +123,28 @@ impl GridActor {
                 (side, l.price)
             };
 
-            if GridState::at_max_position(net_position, side, max_position) {
-                continue;
-            }
-
             if order_type == OrderType::PostOnly
                 && self.book.as_ref().is_some_and(|b| b.would_cross(side, price))
             {
                 skipped_crossed += 1;
                 continue;
+            }
+
+            match side {
+                Side::Buy if projected_long + order_size > max_position => {
+                    skipped_exposure += 1;
+                    continue;
+                }
+                Side::Buy => {
+                    projected_long += order_size;
+                }
+                Side::Sell if projected_short - order_size < -max_position => {
+                    skipped_exposure += 1;
+                    continue;
+                }
+                Side::Sell => {
+                    projected_short -= order_size;
+                }
             }
 
             let cid = self.client_ids.issue();
@@ -148,9 +164,17 @@ impl GridActor {
         if skipped_crossed > 0 {
             tracing::warn!(
                 skipped = skipped_crossed,
-                best_bid = ?self.book.as_ref().and_then(|b| b.best_bid()).map(|l| l.price.to_string()),
-                best_ask = ?self.book.as_ref().and_then(|b| b.best_ask()).map(|l| l.price.to_string()),
+                best_bid = ?self.book.as_ref().and_then(OrderBook::best_bid).map(|l| l.price.to_string()),
+                best_ask = ?self.book.as_ref().and_then(OrderBook::best_ask).map(|l| l.price.to_string()),
                 "Skipping PostOnly levels in cross — range too tight vs current market"
+            );
+        }
+        if skipped_exposure > 0 {
+            tracing::warn!(
+                skipped = skipped_exposure,
+                net_position = %net_position,
+                max_position = %max_position,
+                "Skipping grid levels that would exceed max_position if resting orders filled"
             );
         }
 
@@ -162,18 +186,15 @@ impl GridActor {
         let results = broker.place_orders(&orders).await?;
         let mut placed = 0;
         for (res, cid) in results.iter().zip(target_cids.iter()) {
-            let Some(level) = self
-                .state
-                .levels
-                .iter_mut()
-                .find(|l| l.client_id.as_deref() == Some(cid))
+            let Some(level) =
+                self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
             else {
                 continue;
             };
             if res.success {
                 level.state = LevelState::Active;
-                if !res.order_id.is_empty() {
-                    level.order_id = Some(res.order_id.clone());
+                if let Some(ref oid) = res.order_id {
+                    level.order_id = Some(oid.clone());
                 }
                 placed += 1;
             } else {
@@ -198,7 +219,7 @@ impl GridActor {
         let live = broker.get_open_orders(self.symbol()).await?;
         let live_oids: std::collections::HashSet<&str> =
             live.iter().map(|o| o.id.as_str()).collect();
-        let live_cids: std::collections::HashSet<&str> =
+        let live_client_ids: std::collections::HashSet<&str> =
             live.iter().filter_map(|o| o.client_id.as_deref()).collect();
 
         let mut missing = 0;
@@ -207,7 +228,7 @@ impl GridActor {
                 continue;
             }
             let is_live = match (&l.client_id, &l.order_id) {
-                (Some(cid), _) if live_cids.contains(cid.as_str()) => true,
+                (Some(cid), _) if live_client_ids.contains(cid.as_str()) => true,
                 (_, Some(oid)) if live_oids.contains(oid.as_str()) => true,
                 _ => false,
             };
@@ -225,7 +246,7 @@ impl GridActor {
         let Some(cfg) = self.config.trend_filter.clone() else {
             return Ok(());
         };
-        let Some(mid) = self.book.as_ref().and_then(|b| b.midpoint()) else {
+        let Some(mid) = self.book.as_ref().and_then(OrderBook::midpoint) else {
             return Ok(());
         };
         let was_paused = self.state.paused;
@@ -258,6 +279,16 @@ impl Actor for GridActor {
         tracing::info!("Cancelling stale orders");
         broker.cancel_all_orders(self.symbol()).await?;
 
+        let positions = broker.get_positions().await?;
+        if let Some(position) = positions.iter().find(|p| p.symbol == self.symbol()) {
+            self.inventory.seed_from_position(position);
+            tracing::warn!(
+                net_pos = %self.inventory.net_position,
+                entry = %self.inventory.avg_entry_price,
+                "Seeded grid inventory from existing venue position"
+            );
+        }
+
         let book = broker.get_orderbook(self.symbol(), 20).await?;
         let mid = book.midpoint().ok_or_else(|| {
             BotError::strategy("No orderbook data available to compute mid at startup")
@@ -283,10 +314,8 @@ impl Actor for GridActor {
             );
         }
 
-        let buys =
-            self.state.levels.iter().filter(|l| l.side == Some(Side::Buy)).count();
-        let sells =
-            self.state.levels.iter().filter(|l| l.side == Some(Side::Sell)).count();
+        let buys = self.state.levels.iter().filter(|l| l.side == Some(Side::Buy)).count();
+        let sells = self.state.levels.iter().filter(|l| l.side == Some(Side::Sell)).count();
         tracing::info!(
             lower = %self.config.lower_price,
             upper = %self.config.upper_price,
@@ -315,6 +344,8 @@ impl Actor for GridActor {
         _reason: &WindDownReason,
         cx: &ActorContext,
     ) -> Result<(), BotError> {
+        // WindDownReason is intentionally ignored: grid levels ARE the
+        // position. Cancel-only is correct for every shutdown reason.
         let broker = cx.broker(self.exchange())?;
         tracing::info!("Shutting down grid — cancelling all orders");
         if let Err(e) = broker.cancel_all_orders(self.symbol()).await {
@@ -348,11 +379,7 @@ impl Actor for GridActor {
 
 #[async_trait]
 impl EventHandler<BookUpdate> for GridActor {
-    async fn on_event(
-        &mut self,
-        event: BookUpdate,
-        _cx: &ActorContext,
-    ) -> Result<(), BotError> {
+    async fn on_event(&mut self, event: BookUpdate, _cx: &ActorContext) -> Result<(), BotError> {
         if event.exchange == self.exchange() && event.symbol == self.symbol() {
             self.book = Some(event.orderbook);
         }
@@ -368,8 +395,7 @@ impl EventHandler<Trade> for GridActor {
         }
         self.inventory.record_fill(event.side, event.price, event.quantity);
 
-        let Some(idx) =
-            self.state.find_fill_target(event.client_id.as_deref(), &event.order_id)
+        let Some(idx) = self.state.find_fill_target(event.client_id.as_deref(), &event.order_id)
         else {
             // Could happen if a fill arrives for an order we never saw
             // (e.g. left over from a prior session that get_open_orders
@@ -423,7 +449,10 @@ impl EventHandler<Trade> for GridActor {
             }
             FillOutcome::Unmatched => {
                 // Shouldn't reach: find_fill_target already returned Some(idx).
-                tracing::warn!(level = idx, "record_fill returned Unmatched after find_fill_target");
+                tracing::warn!(
+                    level = idx,
+                    "record_fill returned Unmatched after find_fill_target"
+                );
             }
         }
 
@@ -442,40 +471,33 @@ impl EventHandler<OrderLifecycle> for GridActor {
             return Ok(());
         }
         // Learn exchange order_id once the venue acks our placement.
-        if let Some(cid) = event.order.client_id.as_deref() {
-            if let Some(level) =
+        if let Some(cid) = event.order.client_id.as_deref()
+            && let Some(level) =
                 self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
-            {
-                if level.order_id.is_none() && !event.order.id.is_empty() {
-                    level.order_id = Some(event.order.id.clone());
-                }
-            }
+            && level.order_id.is_none()
+            && !event.order.id.is_empty()
+        {
+            level.order_id = Some(event.order.id.clone());
         }
         // Cancelled/rejected → flip back to Pending so the tick re-places.
         // Log so an operator can tell a venue-side auto-cancel (e.g. order
         // TTL expiry on some testnets) apart from a bug in our reconcile.
-        if matches!(
-            event.order.status,
-            OrderStatus::Cancelled | OrderStatus::Rejected
-        ) {
-            if let Some(cid) = event.order.client_id.as_deref() {
-                if let Some(level) =
-                    self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
-                {
-                    if level.state == LevelState::Active {
-                        tracing::info!(
-                            level = level.index,
-                            price = %level.price,
-                            side = ?level.side,
-                            status = ?event.order.status,
-                            "Lifecycle event flipped Active level back to Pending"
-                        );
-                        level.state = LevelState::Pending;
-                        level.client_id = None;
-                        level.order_id = None;
-                    }
-                }
-            }
+        if matches!(event.order.status, OrderStatus::Cancelled | OrderStatus::Rejected)
+            && let Some(cid) = event.order.client_id.as_deref()
+            && let Some(level) =
+                self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
+            && level.state == LevelState::Active
+        {
+            tracing::info!(
+                level = level.index,
+                price = %level.price,
+                side = ?level.side,
+                status = ?event.order.status,
+                "Lifecycle event flipped Active level back to Pending"
+            );
+            level.state = LevelState::Pending;
+            level.client_id = None;
+            level.order_id = None;
         }
         Ok(())
     }
@@ -513,12 +535,14 @@ mod integration_tests {
     //! `NullBroker`. Exercises the fill → inventory + adjacent re-arm loop
     //! without touching the network.
 
-    use super::*;
     use std::sync::Arc;
+
     use bb_core::broker::Broker;
     use bb_core::events::Trade;
     use bb_core::harness::testing::{NullBroker, ScriptedFeed};
     use bb_core::harness::{ActorSpec, HarnessBuilder};
+
+    use super::*;
 
     fn d(s: &str) -> Decimal {
         s.parse().unwrap()
@@ -551,10 +575,12 @@ mod integration_tests {
             exchange: "bullet".into(),
             symbol: "BTC-USD".into(),
             order_id: "42".into(),
+            trade_id: None,
             client_id: Some("unknown".into()),
             side: Side::Buy,
             price: d("75"),
             quantity: d("1"),
+            timestamp: None,
         }]);
 
         let harness = HarnessBuilder::new()
@@ -566,10 +592,7 @@ mod integration_tests {
         let _ = harness.run().await.unwrap();
 
         let hist = broker.history().await;
-        assert!(
-            !hist.iter().any(|c| c.method == "place_orders"),
-            "unexpected place: {hist:?}"
-        );
+        assert!(!hist.iter().any(|c| c.method == "place_orders"), "unexpected place: {hist:?}");
     }
 
     // --- GridState-level tests for paths the actor relies on but that don't
@@ -648,8 +671,9 @@ mod integration_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn would_cross_skips_inner_level_in_postonly_mode() {
-        use bb_core::types::OrderBook;
         use std::collections::BTreeMap;
+
+        use bb_core::types::OrderBook;
 
         // Build an actor with range straddling an ask that's inside our
         // grid: the level-just-below-ask is a buy, and its price (≥ ask)
@@ -684,4 +708,3 @@ mod integration_tests {
         // test above covers event flow.
     }
 }
-

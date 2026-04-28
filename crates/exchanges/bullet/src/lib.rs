@@ -5,7 +5,4 @@ pub mod convert;
 
 pub use broker::BulletBroker;
 pub use config::BulletConfig;
-pub use connection::{
-    BulletBookFeed, BulletFeeds, BulletMarkPriceFeed, BulletOrderLifecycleFeed, BulletTradeFeed,
-    connect as connect_bullet,
-};
+pub use connection::{BulletFeeds, connect as connect_bullet};

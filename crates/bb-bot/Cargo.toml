@@ -19,12 +19,15 @@ bb-exchange-hyperliquid = { workspace = true }
 bb-strategy-grid = { workspace = true }
 bb-strategy-funding-arb = { workspace = true }
 bb-strategy-avellaneda-stoikov = { workspace = true }
+bb-strategy-reference-arb = { workspace = true }
+bb-exchange-binance = { workspace = true }
 bullet-rust-sdk = { workspace = true }
 rust_decimal = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
+secrecy = { workspace = true }
+async-trait = { workspace = true }

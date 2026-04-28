@@ -1,0 +1,25 @@
+# Known advisories that are unfixable without upstream SDK updates.
+# All are transitive deps from ethers (hyperliquid_rust_sdk) or bullet-rust-sdk.
+# Re-evaluate when those SDKs update.
+[advisories]
+ignore = [
+    # ring 0.16 - AES panic under overflow checking.
+    # Transitive: ethers → jsonwebtoken.
+    "RUSTSEC-2025-0009",
+
+    # rustls-webpki - certificate parsing panics and name constraint bugs.
+    # Transitive: ethers → rustls 0.21 and bullet-rust-sdk → reqwest 0.13.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+
+    # fxhash unmaintained. Transitive: ethers → hashers.
+    "RUSTSEC-2025-0057",
+]
+
+# Remaining warnings (informational, don't fail CI):
+#   RUSTSEC-2024-0384  instant unmaintained  — ethers
+#   RUSTSEC-2024-0436  paste unmaintained    — bullet-rust-sdk → alloy-primitives
+#   RUSTSEC-2025-0010  ring 0.16 unmaintained — ethers
+#   RUSTSEC-2025-0134  rustls-pemfile unmaintained — ethers
+#   RUSTSEC-2026-0097  rand 0.8 unsound      — transitive via tungstenite/rust_decimal

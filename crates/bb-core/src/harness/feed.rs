@@ -6,9 +6,8 @@
 //! cancellation signal. When the shutdown trigger fires, feeds are expected
 //! to observe `cx.cancelled()` and return promptly.
 
-
 use async_trait::async_trait;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::event::Event;
@@ -65,4 +64,65 @@ impl FeedContext {
 #[async_trait]
 pub trait EventFeed<E: Event>: Send + 'static {
     async fn run(self: Box<Self>, tx: EventTx<E>, cx: FeedContext) -> Result<(), BotError>;
+}
+
+enum RxKind<E> {
+    Unbounded(mpsc::UnboundedReceiver<E>),
+    Bounded(mpsc::Receiver<E>),
+}
+
+impl<E> RxKind<E> {
+    async fn recv(&mut self) -> Option<E> {
+        match self {
+            Self::Unbounded(r) => r.recv().await,
+            Self::Bounded(r) => r.recv().await,
+        }
+    }
+}
+
+/// Generic feed bridging an internal mpsc receiver to the harness event bus.
+///
+/// Exchange adapters use this to connect their muxer task to the harness:
+/// the muxer writes to the sender side, and `MpscFeed` drains the receiver
+/// into the bus until cancelled or the sender drops.
+///
+/// Supports both unbounded and bounded mpsc channels:
+/// - [`MpscFeed::new`] — unbounded; safe for critical streams (`Trade`, `OrderLifecycle`) where
+///   dropping events is not acceptable.
+/// - [`MpscFeed::bounded`] — bounded; use for `BookUpdate` / `MarkPriceUpdate` where the muxer uses
+///   `try_send` and drops-newest on overflow. The muxer is responsible for overflow logging.
+pub struct MpscFeed<E: Event> {
+    rx: RxKind<E>,
+}
+
+impl<E: Event> MpscFeed<E> {
+    /// Wrap an unbounded receiver. The muxer's `send()` never blocks or fails
+    /// due to backpressure. Suitable for loss-sensitive streams.
+    pub fn new(rx: mpsc::UnboundedReceiver<E>) -> Self {
+        Self { rx: RxKind::Unbounded(rx) }
+    }
+
+    /// Wrap a bounded receiver. The muxer should use `try_send` and handle
+    /// `TrySendError::Full` by logging and discarding — suitable for
+    /// high-frequency events where the newest data supersedes the oldest.
+    pub fn bounded(rx: mpsc::Receiver<E>) -> Self {
+        Self { rx: RxKind::Bounded(rx) }
+    }
+}
+
+#[async_trait]
+impl<E: Event> EventFeed<E> for MpscFeed<E> {
+    async fn run(self: Box<Self>, tx: EventTx<E>, cx: FeedContext) -> Result<(), BotError> {
+        let mut this = *self;
+        loop {
+            tokio::select! {
+                biased;
+                () = cx.cancelled() => return Ok(()),
+                maybe = this.rx.recv() => match maybe {
+                    Some(event) => { let _ = tx.send(event); }
+                    None => return Ok(()),
+                }
+            }
+        }
+    }
 }

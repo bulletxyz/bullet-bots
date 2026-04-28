@@ -1,20 +1,20 @@
 //! `Harness::run()` — the event loop that owns feeds + actors.
 //!
 //! Responsibilities:
-//!   1. Instantiate the bus and spawn actor handler tasks so subscribers exist
-//!      before feeds start publishing.
+//!   1. Instantiate the bus and spawn actor handler tasks so subscribers exist before feeds start
+//!      publishing.
 //!   2. Call each actor's `init`.
 //!   3. Spawn feed tasks.
-//!   4. Wait for one of: Ctrl-C, a feed task failing, an actor requesting
-//!      shutdown (via `ActorContext::request_shutdown`), or all feeds
-//!      finishing cleanly (→ `InputsClosed`).
-//!   5. Cancel subscription tasks, let them drain, call `wind_down` on every
-//!      actor with the reason.
+//!   4. Wait for one of: Ctrl-C, a feed task failing, an actor requesting shutdown (via
+//!      `ActorContext::request_shutdown`), or all feeds finishing cleanly (→ `InputsClosed`).
+//!   5. Cancel subscription tasks, let them drain, call `wind_down` on every actor with the reason.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use super::actor::WindDownReason;
@@ -22,9 +22,8 @@ use super::builder::{ActorSpawn, BoxInit, BoxStatus, BoxWindDown, FeedSpawn};
 use super::bus::EventBus;
 use super::status::{StatusState, spawn_server};
 use crate::broker::BrokerRegistry;
+use crate::clock::Clock;
 use crate::error::BotError;
-
-type FeedTask = (Arc<str>, JoinHandle<Result<(), BotError>>);
 
 pub(super) struct ActorHandle {
     pub(super) name: Arc<str>,
@@ -39,8 +38,9 @@ pub struct Harness {
     feeds: Vec<Box<dyn FeedSpawn>>,
     actors: Vec<Box<dyn ActorSpawn>>,
     brokers: Arc<BrokerRegistry>,
+    clock: Arc<dyn Clock>,
     enable_signal: bool,
-    status_port: Option<u16>,
+    status_bind: Option<SocketAddr>,
     bus: EventBus,
 }
 
@@ -49,22 +49,19 @@ impl Harness {
         feeds: Vec<Box<dyn FeedSpawn>>,
         actors: Vec<Box<dyn ActorSpawn>>,
         brokers: Arc<BrokerRegistry>,
+        bus: EventBus,
+        clock: Arc<dyn Clock>,
         enable_signal: bool,
-        status_port: Option<u16>,
+        status_bind: Option<SocketAddr>,
     ) -> Self {
-        Self {
-            feeds,
-            actors,
-            brokers,
-            enable_signal,
-            status_port,
-            bus: EventBus::new(),
-        }
+        Self { feeds, actors, brokers, clock, enable_signal, status_bind, bus }
     }
 
     /// Run until shutdown.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(self) -> Result<WindDownReason, BotError> {
         let shutdown = CancellationToken::new();
+        let (actor_failure_tx, mut actor_failure_rx) = mpsc::unbounded_channel();
 
         // 1. Spawn actor subscription tasks up front so broadcasts have subscribers.
         let mut actor_handles: Vec<ActorHandle> = Vec::with_capacity(self.actors.len());
@@ -73,24 +70,27 @@ impl Harness {
             let handle = spec.spawn(
                 &self.bus,
                 Arc::clone(&self.brokers),
+                Arc::clone(&self.clock),
                 shutdown.clone(),
+                actor_failure_tx.clone(),
             );
             tracing::info!(actor = %name, "actor subscribed");
             actor_handles.push(handle);
         }
 
-        // Status API: spawn only once the actor snapshots exist.
-        if let Some(port) = self.status_port {
+        // Status API: bind eagerly so a port-in-use error surfaces before init.
+        if let Some(addr) = self.status_bind {
+            let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+                crate::error::BotError::config(format!("status server bind {addr}: {e}"))
+            })?;
+            tracing::info!(%addr, "Status API listening");
             let state = Arc::new(StatusState {
                 start_time: Instant::now(),
-                actors: actor_handles
-                    .iter()
-                    .map(|h| (h.name.clone(), h.status.clone()))
-                    .collect(),
+                actors: actor_handles.iter().map(|h| (h.name.clone(), h.status.clone())).collect(),
             });
             // Detached — the server lives as a background task and is torn
             // down when the tokio runtime exits.
-            drop(spawn_server(port, state));
+            drop(spawn_server(listener, state));
         }
 
         // 2. Call each actor's init.
@@ -108,13 +108,21 @@ impl Harness {
             }
         }
 
-        // 3. Spawn feeds.
-        let mut feed_tasks: Vec<FeedTask> = Vec::new();
+        // 3. Spawn feeds. Each wrapper task carries its own name so join_next can identify the
+        //    completed feed without an external index.
+        let mut feed_set: JoinSet<(Arc<str>, Result<(), BotError>)> = JoinSet::new();
         for feed in self.feeds {
             let name: Arc<str> = Arc::from(feed.name().to_string());
             let task = feed.spawn(&self.bus, shutdown.clone());
+            let feed_name = name.clone();
+            feed_set.spawn(async move {
+                let result = match task.await {
+                    Ok(r) => r,
+                    Err(_) => Err(BotError::config(format!("{feed_name} feed panicked"))),
+                };
+                (feed_name, result)
+            });
             tracing::info!(feed = %name, "feed started");
-            feed_tasks.push((name, task));
         }
 
         // 4. Wait for a shutdown-inducing event.
@@ -128,35 +136,41 @@ impl Harness {
         tokio::pin!(signal_fut);
 
         let reason: WindDownReason = loop {
-            if feed_tasks.is_empty() {
+            if feed_set.is_empty() {
                 break WindDownReason::InputsClosed;
             }
             tokio::select! {
                 biased;
-                _ = shutdown.cancelled() => {
+                Some(reason) = actor_failure_rx.recv() => {
+                    tracing::error!(?reason, "actor failure reported");
+                    break reason;
+                }
+                () = shutdown.cancelled() => {
                     tracing::info!("shutdown requested by actor");
                     break WindDownReason::Signal;
                 }
-                _ = &mut signal_fut => {
+                () = &mut signal_fut => {
                     tracing::info!("Ctrl-C received");
                     break WindDownReason::Signal;
                 }
-                result = await_any_feed(&mut feed_tasks) => {
-                    match result {
-                        FeedExit::Done(name) => {
+                Some(join_res) = feed_set.join_next() => {
+                    match join_res {
+                        Ok((name, Ok(()))) => {
                             tracing::info!(feed = %name, "feed exited cleanly");
                         }
-                        FeedExit::Err(name, e) => {
+                        Ok((name, Err(e))) => {
                             tracing::error!(feed = %name, error = %e, "feed failed");
                             break WindDownReason::FeedFailed {
                                 feed: name.to_string(),
                                 error: e.to_string(),
                             };
                         }
-                        FeedExit::Panicked(name) => {
+                        Err(e) => {
+                            // The wrapper task itself panicked — shouldn't happen
+                            // but guard it anyway.
                             break WindDownReason::FeedFailed {
-                                feed: name.to_string(),
-                                error: "panicked".to_string(),
+                                feed: "<unknown>".to_string(),
+                                error: format!("feed wrapper panicked: {e}"),
                             };
                         }
                     }
@@ -191,40 +205,3 @@ async fn wind_down_all(
     }
     Ok(reason)
 }
-
-enum FeedExit {
-    Done(Arc<str>),
-    Err(Arc<str>, BotError),
-    Panicked(Arc<str>),
-}
-
-/// Await the first task in `tasks` to finish, remove it, and return its exit.
-///
-/// Under the hood we poll each `JoinHandle` once per wakeup. `JoinHandle`
-/// registers the waker on each poll, so when any task completes the runtime
-/// wakes us and we return — no busy loop, no per-tick CPU cost while all
-/// feeds are idle. For small N (one muxer feed per event type per venue —
-/// typically < 10) this beats the ceremony of `FuturesUnordered` + rehydrate
-/// the survivors.
-async fn await_any_feed(tasks: &mut Vec<FeedTask>) -> FeedExit {
-    use std::task::Poll;
-    use futures_util::future::poll_fn;
-
-    let (idx, res) = poll_fn(|cx| {
-        for (i, (_, task)) in tasks.iter_mut().enumerate() {
-            if let Poll::Ready(res) = std::pin::Pin::new(task).poll(cx) {
-                return Poll::Ready((i, res));
-            }
-        }
-        Poll::Pending
-    })
-    .await;
-
-    let (name, _) = tasks.swap_remove(idx);
-    match res {
-        Ok(Ok(())) => FeedExit::Done(name),
-        Ok(Err(e)) => FeedExit::Err(name, e),
-        Err(_) => FeedExit::Panicked(name),
-    }
-}
-

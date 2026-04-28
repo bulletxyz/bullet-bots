@@ -1,0 +1,60 @@
+# Reference-price arbitrage: trade Bullet against a Binance spot reference.
+# Run with: cargo run --bin bb-bot -- run --config config/reference-arb-example.toml
+#
+# The strategy opens a directional market position on Bullet whenever its book
+# mid diverges from the Binance BTCUSDT mid by more than entry_threshold_bps
+# for at least persistence_ticks consecutive evaluations, and exits on TP
+# (spread reverts within exit_threshold_bps on the entry side), SL (spread
+# widens past stop_loss_bps), or timeout (max_hold_ticks).
+
+[engine]
+# Short tick interval so the per-tick status log gives good resolution on
+# the observation timeline (5s → 12 logs/min).
+tick_interval_ms = 5000
+status_port = 3032
+
+[exchanges.bullet]
+type = "bullet"
+network = "testnet"
+# Set via: export BB_BULLET_PRIVATE_KEY_HEX="0x..." or BB_BULLET_KEY_FILE=/path/to/key.json
+
+[strategy]
+type = "reference-arb"
+
+[strategy.reference-arb]
+exchange = "bullet"
+symbol = "BTC-USD"
+binance_symbol = "btcusdt"
+# Bullet is a perp DEX → compare perp-to-perp via Binance USDT-M futures
+# (`fstream.binance.com`). Using spot would introduce a 5-50 bps basis
+# confound that is not actually arbitrageable.
+binance_market = "perp"
+
+# Tight size while we're validating the signal — adjust upward once we have
+# a few dozen cycles of paper PnL data.
+order_size = "0.0001"            # ~$10 notional at $100k BTC
+max_position = "0.0003"          # 3× order_size
+
+# Entry/exit band. Edge = entry - exit = 12 bps = 1.5 × 2 × 4 (fee floor, just passes).
+# Tight enough to actually trigger on testnet given the expected price lag,
+# wide enough to clear round-trip taker fees.
+entry_threshold_bps = "15"
+exit_threshold_bps  = "3"
+stop_loss_bps       = "40"
+
+# Robustness.
+persistence_ticks    = 2           # filter single-update latency artifacts
+max_hold_ticks       = 24          # 24 × 5s = 2 min force-exit
+reference_stale_secs = 10          # refuse trades if Binance silent > 10s
+
+# Fees — Bullet testnet taker fee. Tune if the venue quotes differently.
+taker_fee_bps     = "4"
+min_edge_multiple = "1.5"
+
+# Real fills on testnet. Flip to true for paper-trading observation.
+dry_run = false
+
+[logging]
+# "info" to see ticks + signals + fills; add "bb_strategy_reference_arb=debug"
+# to get the per-update OBSERVE log (every book/reference update).
+level = "info"

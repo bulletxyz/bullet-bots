@@ -38,7 +38,9 @@ impl Volatility {
     }
 
     /// Stddev of log returns across the buffered samples. Returns `None` until
-    /// we have at least two samples.
+    /// we have at least three samples (two returns needed for Bessel-corrected
+    /// sample variance; one return gives 0/0 which is undefined).
+    #[allow(clippy::cast_precision_loss)]
     pub fn sigma(&self) -> Option<f64> {
         if self.samples.len() < 2 {
             return None;
@@ -50,8 +52,15 @@ impl Volatility {
             .map(|((_, a), (_, b))| b - a)
             .collect();
         let n = returns.len() as f64;
+        if n < 2.0 {
+            // Single return → no variance estimate (0 degrees of freedom).
+            return None;
+        }
         let mean = returns.iter().sum::<f64>() / n;
-        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n;
+        // Bessel's correction (÷ n−1) gives the unbiased sample variance.
+        // Without it, sigma is systematically too tight at low sample counts,
+        // which causes the A-S spread to be narrower than the model requires.
+        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
         Some(var.sqrt())
     }
 
@@ -61,6 +70,7 @@ impl Volatility {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 
@@ -70,6 +80,12 @@ mod tests {
         assert_eq!(v.sigma(), None);
         v.push(100.0, Instant::now());
         assert_eq!(v.sigma(), None);
+        // Two samples gives one return — not enough for unbiased sample variance.
+        v.push(101.0, Instant::now());
+        assert_eq!(v.sigma(), None);
+        // Three samples gives two returns — now we have a valid estimate.
+        v.push(102.0, Instant::now());
+        assert!(v.sigma().is_some());
     }
 
     #[test]
