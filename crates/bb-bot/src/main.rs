@@ -205,13 +205,6 @@ where
     cfg.validate().map_err(|e| format!("{sub_name} config invalid: {e}").into())
 }
 
-fn with_status(builder: HarnessBuilder, engine: &EngineConfig) -> HarnessBuilder {
-    match engine.status_bind {
-        Some(addr) => builder.with_status_bind(addr),
-        None => builder.with_status_port(engine.status_port),
-    }
-}
-
 // -- Dispatch: one function per strategy type -------------------------------
 
 async fn run_simple_mm(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -224,7 +217,8 @@ async fn run_simple_mm(config: AppConfig) -> Result<(), Box<dyn std::error::Erro
     let actor = SimpleMmActor::new(mm_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = with_status(HarnessBuilder::new(), &config.engine)
+    let harness = HarnessBuilder::new()
+        .with_status_config(&config.engine)
         .enable_signal_shutdown()
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
@@ -254,7 +248,8 @@ async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let grid = GridActor::new(grid_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = with_status(HarnessBuilder::new(), &config.engine)
+    let harness = HarnessBuilder::new()
+        .with_status_config(&config.engine)
         .enable_signal_shutdown()
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
@@ -298,7 +293,8 @@ async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::er
     let actor = AvellanedaStoikovActor::new(strat_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let mut builder = with_status(HarnessBuilder::new(), &config.engine)
+    let mut builder = HarnessBuilder::new()
+        .with_status_config(&config.engine)
         .enable_signal_shutdown()
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
@@ -338,7 +334,8 @@ async fn run_funding_arb(config: AppConfig) -> Result<(), Box<dyn std::error::Er
     let actor = FundingArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = with_status(HarnessBuilder::new(), &config.engine)
+    let harness = HarnessBuilder::new()
+        .with_status_config(&config.engine)
         .enable_signal_shutdown()
         .wire_broker("bullet", bullet_broker)
         .wire_broker("hyperliquid", hl_broker)
@@ -376,7 +373,8 @@ async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::
     let actor = ReferenceArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = with_status(HarnessBuilder::new(), &config.engine)
+    let harness = HarnessBuilder::new()
+        .with_status_config(&config.engine)
         .enable_signal_shutdown()
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
