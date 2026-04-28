@@ -224,7 +224,6 @@ async fn run_simple_mm(config: AppConfig) -> Result<(), Box<dyn std::error::Erro
         .wire_feed_named("bullet-trades", feeds.trade)
         .wire_feed_named("bullet-book", feeds.book)
         .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
-        .wire_feed_named("bullet-mark", feeds.mark_price)
         .wire_feed_named("ticks", tick)
         .wire_actor(
             ActorSpec::new("simple-mm", actor)
