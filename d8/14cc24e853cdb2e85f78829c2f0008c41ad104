@@ -1,0 +1,29 @@
+.gitignore
+  399f7b5f311193aa 7-9
+config/grid-example.toml
+  399f7b5f311193aa 14-16,34-37,40
+config/avellaneda-stoikov-example.toml
+  399f7b5f311193aa 54-57
+config/reference-arb-example.toml
+  399f7b5f311193aa 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d814cc24e853cdb2e85f78829c2f0008c41ad104",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 24,
+      "total_deletions": 142,
+      "accepted_lines": 344,
+      "overriden_lines": 0
+    }
+  }
+}
