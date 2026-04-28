@@ -55,10 +55,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@cargo-audit
-      - run: >
-          cargo audit
-          --ignore RUSTSEC-2025-0009
-          --ignore RUSTSEC-2026-0098
-          --ignore RUSTSEC-2026-0099
-          --ignore RUSTSEC-2026-0104
-          --ignore RUSTSEC-2025-0057
+      - run: cargo audit
