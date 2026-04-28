@@ -1,0 +1,35 @@
+crates/strategies/avellaneda-stoikov/src/strategy.rs
+  399f7b5f311193aa 4-5,531-533,551-554,568-571,718-720,784-785,853
+crates/bb-core/src/events.rs
+  399f7b5f311193aa 98-101
+crates/strategies/grid/src/strategy.rs
+  399f7b5f311193aa 5-6
+crates/strategies/reference-arb/src/strategy.rs
+  399f7b5f311193aa 47-60,64-69,845-846
+crates/strategies/grid/src/grid.rs
+  399f7b5f311193aa 427-430
+crates/strategies/funding-arb/src/strategy.rs
+  399f7b5f311193aa 169-170,190-192,470-472,476-477,647,667,681,735-737
+crates/bb-core/src/harness/mod.rs
+  399f7b5f311193aa 32-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "ff71c488a22d5c719dc86a2748aa09a3e513307b",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 69,
+      "total_deletions": 53,
+      "accepted_lines": 69,
+      "overriden_lines": 0
+    }
+  }
+}
