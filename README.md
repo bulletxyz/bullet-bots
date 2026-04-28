@@ -8,9 +8,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 
-Production-grade, open-source trading bot framework for [Bullet](https://bullet.xyz) perpetuals and other exchanges — written in Rust, built for latency-sensitive environments.
+Live-trading-capable reference framework for [Bullet](https://bullet.xyz) perpetuals and other exchanges — written in Rust, with a small typed runtime for building event-driven bots.
 
-Ships with exchange adapters for Bullet, Hyperliquid, and Binance, plus four ready-to-run strategies you can use out of the box or extend with your own logic.
+Ships with exchange adapters for Bullet, Hyperliquid, and Binance, plus five ready-to-run strategies you can use out of the box or extend with your own logic.
 
 ## Architecture at a glance
 
@@ -37,34 +37,49 @@ cargo build
 # Run tests
 cargo nextest run
 
-# Validate a config (no keys needed)
-cargo run --bin bb-bot -- validate --config config/grid-example.toml
+# Validate a starter config (no keys needed)
+cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml
 
-# Run
-cargo run --bin bb-bot -- run --config config/grid-example.toml
+# Generate a Bullet testnet key, fund it with the printed faucet curl,
+# then run the starter market maker.
+cargo run --bin bb-bot -- keygen --network testnet
+cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
 ```
+
+Recommended first path:
+
+1. `keygen` — create a testnet key.
+2. Fund it with the faucet command printed by `keygen`.
+3. `observe` — collect Bullet/Binance spread data without trading.
+4. `validate` — preflight the config.
+5. `run` — start tiny, watch logs plus `GET /status`.
+6. `flatten` — cancel and close manually if you need to clean up.
 
 ## Key management
 
-Keys are passed via environment variables, never in config files. Two options:
+Private keys are passed via environment variables or keystore files, not copied
+into example configs. Two options:
 
-- **Key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` / `BB_HYPERLIQUID_KEY_FILE`.
+- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.json"` under `[exchanges.bullet]`.
 - **Hex key:** set `BB_BULLET_PRIVATE_KEY_HEX` / `BB_HYPERLIQUID_PRIVATE_KEY_HEX`, e.g. via a `.env` file (already gitignored).
 
 ## Strategies
 
-| Strategy | Description | Config example |
-|---|---|---|
-| [Grid](crates/strategies/grid/README.md) | Fixed-range level grid with anchor bias and trend filter | `config/grid-example.toml` |
-| [Avellaneda-Stoikov](crates/strategies/avellaneda-stoikov/README.md) | Reservation-price market maker with inventory skew and multi-level ladder | `config/avellaneda-stoikov-example.toml` |
-| [Funding arb](crates/strategies/funding-arb/README.md) | Cross-venue delta-neutral funding rate arb | `config/funding-arb-example.toml` |
-| [Reference arb](crates/strategies/reference-arb/README.md) | Spread arb between Bullet and Binance perpetuals | `config/reference-arb-example.toml` |
+Start with `simple-mm`, then move down the table as you need more machinery.
+
+| Order | Strategy | Description | Config example |
+|---|---|---|---|
+| 1 | [Simple MM](crates/strategies/simple-mm/README.md) | One bid/ask around mid with refresh + inventory cap | `config/simple-mm-example.toml` |
+| 2 | [Grid](crates/strategies/grid/README.md) | Fixed-range level grid with anchor bias and trend filter | `config/grid-example.toml` |
+| 3 | [Reference arb](crates/strategies/reference-arb/README.md) | Spread arb between Bullet and Binance perpetuals | `config/reference-arb-example.toml` |
+| 4 | [Avellaneda-Stoikov](crates/strategies/avellaneda-stoikov/README.md) | Reservation-price market maker with inventory skew and multi-level ladder | `config/avellaneda-stoikov-example.toml` |
+| 5 | [Funding arb](crates/strategies/funding-arb/README.md) | Cross-venue delta-neutral funding rate arb | `config/funding-arb-example.toml` |
 
 Each README covers what the strategy does, its state machine, key design decisions, config reference, and future work.
 
 ## Writing your own strategy
 
-1. Create a crate in `crates/strategies/<name>/`.
+1. Copy `crates/strategies/simple-mm` or create a crate in `crates/strategies/<name>/`.
 2. Implement `Actor` + `EventHandler<E>` for each event type you care about.
 3. Register in `bb-bot/src/main.rs` with `HarnessBuilder::wire_actor`.
 4. Add an example config.
@@ -94,8 +109,9 @@ and clarifies where to build extensions:
 - **Prometheus metrics** — No `/metrics` endpoint; `/status` is JSON-only.
 - **Rate limiting** — Each broker manages its own rate limit; the framework has no
   built-in token-bucket or request queue.
-- **Instrument validation** — No tick-size / lot-size / min-notional rounding;
-  strategies post raw prices and the venue rejects bad ones.
+- **Global instrument validation** — Bullet snaps tick-size / lot-size in its
+  broker, but the framework does not provide a venue-independent min-notional
+  or risk-budget preflight.
 - **Extended `OrderType`** — `Limit`, `PostOnly`, `Market` only. No IOC, FOK, GTD,
   or `time_in_force` plumbing beyond what the adapters already need.
 

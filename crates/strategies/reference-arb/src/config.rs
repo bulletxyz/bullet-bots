@@ -6,6 +6,7 @@
 //! approach: refuse to run a parameterization whose edge is eaten by
 //! round-trip taker fees.
 
+use bb_core::config::ValidateConfig;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -94,8 +95,8 @@ fn default_binance_market() -> String {
     "perp".into()
 }
 
-impl ReferenceArbConfig {
-    pub fn validate(&self) -> Result<(), String> {
+impl ValidateConfig for ReferenceArbConfig {
+    fn validate(&self) -> Result<(), String> {
         if self.order_size <= Decimal::ZERO {
             return Err("order_size must be positive".into());
         }
@@ -138,6 +139,12 @@ impl ReferenceArbConfig {
             ));
         }
         Ok(())
+    }
+}
+
+impl ReferenceArbConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        <Self as ValidateConfig>::validate(self)
     }
 }
 

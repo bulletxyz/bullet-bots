@@ -1,4 +1,14 @@
+use std::net::SocketAddr;
+
 use serde::Deserialize;
+
+/// Semantic validation for parsed config structs.
+///
+/// TOML/serde parsing answers "is the shape right?". `ValidateConfig` answers
+/// "do these values make sense together?".
+pub trait ValidateConfig {
+    fn validate(&self) -> Result<(), String>;
+}
 
 /// Engine-level configuration shared across all strategies.
 ///
@@ -14,6 +24,11 @@ pub struct EngineConfig {
     /// Port for the HTTP status API. Omit from config to disable the server.
     #[serde(default)]
     pub status_port: Option<u16>,
+
+    /// Explicit bind address for the HTTP status API. Takes precedence over
+    /// `status_port`, e.g. `"0.0.0.0:3030"` for remote monitoring.
+    #[serde(default)]
+    pub status_bind: Option<SocketAddr>,
 }
 
 fn default_tick_interval() -> u64 {

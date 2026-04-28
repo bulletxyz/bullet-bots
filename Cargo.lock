@@ -338,6 +338,7 @@ dependencies = [
  "bb-strategy-funding-arb",
  "bb-strategy-grid",
  "bb-strategy-reference-arb",
+ "bb-strategy-simple-mm",
  "bullet-rust-sdk",
  "clap",
  "rust_decimal",
@@ -457,6 +458,19 @@ dependencies = [
  "async-trait",
  "bb-core",
  "bb-exchange-binance",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bb-strategy-simple-mm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bb-core",
  "rust_decimal",
  "serde",
  "serde_json",

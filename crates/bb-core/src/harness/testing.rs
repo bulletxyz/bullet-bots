@@ -21,6 +21,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -102,6 +103,35 @@ impl<E: Event> EventFeed<E> for MarketDataReplayFeed<E> {
     }
 }
 
+/// Like [`ScriptedFeed`] but each event is preceded by an optional sleep,
+/// letting tests control ordering across multiple feeds without real delays.
+/// Pair with `tokio::time::pause()` for deterministic scheduling.
+///
+/// Each entry is `(delay_before_send, event)`. A zero `Duration` skips the sleep.
+pub struct TimedFeed<E: Event> {
+    events: Vec<(Duration, E)>,
+}
+
+impl<E: Event> TimedFeed<E> {
+    pub fn new(events: Vec<(Duration, E)>) -> Self {
+        Self { events }
+    }
+}
+
+#[async_trait]
+impl<E: Event> EventFeed<E> for TimedFeed<E> {
+    async fn run(self: Box<Self>, tx: EventTx<E>, _cx: FeedContext) -> Result<(), BotError> {
+        for (delay, event) in self.events {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            let _ = tx.send(event);
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    }
+}
+
 /// A single recorded broker call. Read via [`MockBroker::history`].
 #[derive(Debug, Clone, Default)]
 pub struct RecordedCall {
@@ -129,6 +159,10 @@ pub struct MockBroker {
     next_order_id: AtomicU64,
     place_queue: Mutex<VecDeque<Result<(), BotError>>>,
     cancel_queue: Mutex<VecDeque<Result<(), BotError>>>,
+    /// Per-order cancel results. Each entry is the full `Vec<CancelResult>` for
+    /// one `cancel_orders` call. Checked before `cancel_queue`; when populated,
+    /// the queued result is returned as-is, bypassing the default all-success path.
+    cancel_results_queue: Mutex<VecDeque<Vec<CancelResult>>>,
     cancel_all_queue: Mutex<VecDeque<Result<(), BotError>>>,
 }
 
@@ -143,6 +177,7 @@ impl MockBroker {
             next_order_id: AtomicU64::new(1),
             place_queue: Mutex::new(VecDeque::new()),
             cancel_queue: Mutex::new(VecDeque::new()),
+            cancel_results_queue: Mutex::new(VecDeque::new()),
             cancel_all_queue: Mutex::new(VecDeque::new()),
         }
     }
@@ -161,6 +196,14 @@ impl MockBroker {
     /// Queue a response for the next `cancel_orders` call.
     pub async fn queue_cancel_response(&self, response: Result<(), BotError>) {
         self.cancel_queue.lock().await.push_back(response);
+    }
+
+    /// Queue per-order `CancelResult`s for the next `cancel_orders` call.
+    /// The slice must have one entry per order in the call. Takes precedence
+    /// over `queue_cancel_response` — use this to simulate partial failures
+    /// (e.g. one order rejected, another accepted).
+    pub async fn queue_cancel_results(&self, results: Vec<CancelResult>) {
+        self.cancel_results_queue.lock().await.push_back(results);
     }
 
     /// Queue a response for the next `cancel_all_orders` call.
@@ -272,6 +315,9 @@ impl Broker for MockBroker {
             ..Default::default()
         })
         .await;
+        if let Some(results) = self.cancel_results_queue.lock().await.pop_front() {
+            return Ok(results);
+        }
         if let Some(Err(e)) = self.cancel_queue.lock().await.pop_front() {
             return Err(e);
         }

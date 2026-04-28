@@ -1,5 +1,11 @@
 # Writing a strategy
 
+If this is your first pass through the framework, start by reading
+[`crates/strategies/simple-mm`](crates/strategies/simple-mm). It is the smallest
+real strategy in the repo: one bid, one ask, fixed spreads, refresh cadence,
+inventory cap, and clean shutdown. This guide shows how to create a new
+strategy from scratch once that shape makes sense.
+
 This guide walks through adding a new strategy in the harness model using a
 toy example: a "buy-the-dip" bot that places a bid when the book drops more
 than `X%` below a rolling reference price, and closes when it bounces back.

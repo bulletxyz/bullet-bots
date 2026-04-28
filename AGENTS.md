@@ -28,7 +28,7 @@ fail-fast.
 Validate a config without connecting:
 
 ```sh
-cargo run --bin bb-bot -- validate --config config/grid-example.toml
+cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml
 ```
 
 Generate a keypair (first time):
@@ -41,7 +41,7 @@ cargo run --bin bb-bot -- keygen --network testnet
 Run a bot (default: reads `~/.config/bullet/id.json`):
 
 ```sh
-cargo run --bin bb-bot -- run --config config/grid-example.toml
+cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
 ```
 
 Or point at an explicit keystore / use hex for CI:
@@ -227,11 +227,13 @@ crates/
                       real (not hardcoded zero)
     binance/          Binance reference-price feed (read-only, no broker)
   strategies/
+    simple-mm/           Starter one-bid/one-ask market maker
     grid/                Static grid — fixed-range, anchor-biased
     avellaneda-stoikov/  A-S market maker — actor
     funding-arb/         Cross-venue funding arb — actor
     reference-arb/       Reference-price arb vs Binance perp microprice
 config/
+  simple-mm-example.toml
   grid-example.toml
   avellaneda-stoikov-example.toml
   funding-arb-example.toml
@@ -279,15 +281,17 @@ the full walkthrough including reconnect patterns and the `Trade` /
 
 **Hyperliquid**: `hyperliquid_rust_sdk` 0.6 + `ethers` 2. secp256k1 keys.
 `InfoClient::with_reconnect` handles reconnection. Symbol mapping: Bullet
-`"BTC-USD"` ↔ HL `"BTC"`. AllMids subscription provides mark prices; funding
-rates currently emitted as zero (needs `ActiveAssetCtx` subscription — TODO).
+`"BTC-USD"` ↔ HL `"BTC"`. `ActiveAssetCtx` provides real funding rates;
+`AllMids` remains a mark-price fallback when no funding field is present.
 
 ## Config Format
 
 TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 `[strategy.<type>]`, `[logging]`.
 
-- `[engine]` — `tick_interval_ms`, `status_port` (optional). `symbol` lives inside each `[strategy.<name>]` section so multi-symbol setups are explicit.
+- `[engine]` — `tick_interval_ms`, `status_port` (optional), or
+  `status_bind = "host:port"` for explicit bind. `symbol` lives inside each
+  `[strategy.<name>]` section so multi-symbol setups are explicit.
 - Exchange configs: `type = "<name>"` + adapter-specific fields. Bullet
   resolves key material in this order: `key_file` (in config) → env
   `BB_BULLET_KEY_FILE` → env `BB_BULLET_PRIVATE_KEY_HEX` → `private_key_hex`

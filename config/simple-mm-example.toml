@@ -1,0 +1,41 @@
+# Simple market maker — best starting point for new strategy authors.
+#
+# One bid and one ask are quoted around Bullet mid-price. The bot refreshes
+# periodically, updates inventory from Trade events, and cancels resting orders
+# on shutdown.
+#
+# Run:
+#   cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml
+#   cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
+
+[engine]
+tick_interval_ms = 5000
+status_port = 3030
+
+[exchanges.bullet]
+type = "bullet"
+network = "testnet"
+# Key material — do NOT put private keys in this file.
+# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
+# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+
+[strategy]
+type = "simple-mm"
+
+[strategy.simple-mm]
+symbol = "BTC-USD"
+bid_spread_bps = "10"
+ask_spread_bps = "10"
+order_size = "0.001"
+max_position = "0.005"
+refresh_secs = 5
+refresh_threshold_bps = "1"
+order_type = "post_only"
+dry_run = false
+
+[strategy.simple-mm.fees]
+maker_bps = "1.0"
+min_spread_fee_multiplier = "3.0"
+
+[logging]
+level = "info"

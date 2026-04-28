@@ -23,6 +23,7 @@ use super::feed::{EventFeed, EventTx, FeedContext};
 use super::harness::{ActorHandle, Harness};
 use crate::broker::{Broker, BrokerRegistry};
 use crate::clock::{Clock, SystemClock};
+use crate::config::EngineConfig;
 use crate::error::BotError;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -347,6 +348,18 @@ impl HarnessBuilder {
     pub fn with_status_bind(mut self, addr: SocketAddr) -> Self {
         self.status_bind = Some(addr);
         self
+    }
+
+    /// Apply status API settings from [`EngineConfig`].
+    ///
+    /// `status_bind` wins when present; otherwise `status_port` binds to
+    /// `127.0.0.1:<port>`. If neither is set, the status API is disabled.
+    #[must_use]
+    pub fn with_status_config(self, engine: &EngineConfig) -> Self {
+        match engine.status_bind {
+            Some(addr) => self.with_status_bind(addr),
+            None => self.with_status_port(engine.status_port),
+        }
     }
 
     /// Override the clock used by all actors' [`ActorContext`]. Defaults to

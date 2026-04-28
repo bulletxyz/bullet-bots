@@ -37,6 +37,7 @@ bb-exchange-bullet = { path = "crates/exchanges/bullet" }
 bb-exchange-hyperliquid = { path = "crates/exchanges/hyperliquid" }
 bb-exchange-binance = { path = "crates/exchanges/binance" }
 bb-strategy-grid = { path = "crates/strategies/grid" }
+bb-strategy-simple-mm = { path = "crates/strategies/simple-mm" }
 bb-strategy-funding-arb = { path = "crates/strategies/funding-arb" }
 bb-strategy-avellaneda-stoikov = { path = "crates/strategies/avellaneda-stoikov" }
 bb-strategy-reference-arb = { path = "crates/strategies/reference-arb" }

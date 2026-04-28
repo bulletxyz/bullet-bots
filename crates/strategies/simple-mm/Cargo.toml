@@ -1,0 +1,24 @@
+[package]
+name = "bb-strategy-simple-mm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Simple starter market-making strategy for bullet-bots"
+
+[lints]
+workspace = true
+
+[dependencies]
+bb-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lib]
+doctest = false
