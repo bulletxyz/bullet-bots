@@ -4,3 +4,6 @@
 .env
 .DS_Store
 .claude/
+
+# Local/experimental configs — put personal configs here
+config/local/

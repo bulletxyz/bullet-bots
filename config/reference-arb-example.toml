@@ -35,7 +35,7 @@ binance_market = "perp"
 order_size = "0.0001"            # ~$10 notional at $100k BTC
 max_position = "0.0003"          # 3× order_size
 
-# Entry/exit band. Edge = entry - exit = 12 bps > 1.5 × 2 × 4 = 12 bps (fee floor).
+# Entry/exit band. Edge = entry - exit = 12 bps = 1.5 × 2 × 4 (fee floor, just passes).
 # Tight enough to actually trigger on testnet given the expected price lag,
 # wide enough to clear round-trip taker fees.
 entry_threshold_bps = "15"

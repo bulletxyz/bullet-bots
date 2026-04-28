@@ -51,10 +51,10 @@ order_refresh_secs = 1
 # Selective amend threshold in bps of mid. A slot's price must drift at least
 # this far before we send an amend. Lower = more reactive (more round-trips,
 # higher rate-limit pressure); higher = laggier quotes but fewer API calls.
-# At BTC ≈ $77k:
-#   0.5 bps ≈ $3.85 trigger — conservative.
-#   0.1 bps ≈ $0.77 — moderate (this default).
-#   0.02 bps ≈ $0.15 — aggressive; see `avellaneda-stoikov-test.toml`.
+# At BTC ≈ $94k:
+#   0.5 bps ≈ $4.70 trigger — conservative.
+#   0.1 bps ≈ $0.94 — moderate (this default).
+#   0.02 bps ≈ $0.19 — aggressive.
 amend_threshold_bps = "0.1"
 
 # Per-level threshold widening. Outer rungs fill less often, so chasing fair

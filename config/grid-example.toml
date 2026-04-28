@@ -11,9 +11,9 @@
 #
 # Run: cargo run --bin bb-bot -- run --config config/grid-example.toml
 #
-# ADJUST THE RANGE BEFORE RUNNING: lower_price / upper_price should straddle
-# the price you expect to trade around. The defaults target BTC in the
-# $70k-$85k range; if the market is well outside that, set your own bounds.
+# ADJUST THE RANGE BEFORE RUNNING: lower_price / upper_price must straddle
+# the current market price or the grid starts idle. The values below are
+# placeholders — set them to your expected trading range before running.
 
 [engine]
 tick_interval_ms = 5000
@@ -31,13 +31,13 @@ type = "grid"
 
 [strategy.grid]
 symbol = "BTC-USD"
-lower_price = "70000"
-upper_price = "85000"
-num_levels = 31                 # spacing = $500/level (~0.65%)
-# anchor_price = "77500"        # optional — defaults to current mid
+lower_price = "80000"           # placeholder — set to your expected range
+upper_price = "100000"          # placeholder — set to your expected range
+num_levels = 21                 # 20 gaps × $1000 = $20k range; adjust with price range
+# anchor_price = "90000"        # optional — defaults to current mid
 order_size = "0.001"
 order_type = "post_only"
-max_position = "0.015"          # 15× order_size; caps inventory on one-sided moves
+max_position = "0.010"          # 10× order_size; caps inventory on one-sided moves
 
 # Fee-floor guardrail: refuses to start if spacing can't cover
 # `min_spacing_fee_multiplier × round-trip maker fees`.
