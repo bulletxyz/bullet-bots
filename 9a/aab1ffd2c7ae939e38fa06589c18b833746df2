@@ -1,0 +1,36 @@
+README.md
+  da4cf64beecda85a 3-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "9aaab1ffd2c7ae939e38fa06589c18b833746df2",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 109,
+      "total_deletions": 0,
+      "accepted_lines": 328,
+      "overriden_lines": 0
+    },
+    "da4cf64beecda85a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dcee8-7039-7691-be35-5dbcb18cbaa1",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 718,
+      "overriden_lines": 0
+    }
+  }
+}
