@@ -1,0 +1,25 @@
+README.md
+  399f7b5f311193aa 1-3,5-9
+docs/banner.svg
+  399f7b5f311193aa 1-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d214ac48c96053758b6bf74c5d9c3fe6de1f1cb4",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 90,
+      "total_deletions": 4,
+      "accepted_lines": 309,
+      "overriden_lines": 0
+    }
+  }
+}
