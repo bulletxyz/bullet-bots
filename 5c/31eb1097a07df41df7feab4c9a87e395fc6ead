@@ -1,0 +1,23 @@
+README.md
+  053c5ac0773f4018 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "5c31eb1097a07df41df7feab4c9a87e395fc6ead",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 40,
+      "overriden_lines": 0
+    }
+  }
+}
