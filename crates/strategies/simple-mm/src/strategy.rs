@@ -128,7 +128,6 @@ impl SimpleMmActor {
         let symbol = self.symbol().to_string();
         let book = self.book.as_ref();
         let mut cancels = Vec::new();
-        let mut cancel_sides = Vec::new(); // parallel to `cancels` — which side each cancel belongs to
         let mut placements = Vec::new();
         let mut new_slots = Vec::new();
 
@@ -144,7 +143,6 @@ impl SimpleMmActor {
                 && (!should_have_quote || needs_refresh)
             {
                 cancels.push(Self::cancel_for(slot, &symbol));
-                cancel_sides.push(side);
             }
 
             if should_have_quote && needs_refresh {
@@ -203,29 +201,32 @@ impl SimpleMmActor {
         }
 
         let broker = cx.broker(self.exchange())?;
-        let mut failed_cancel_sides = std::collections::HashSet::new();
         if !cancels.is_empty() {
             let results = broker.cancel_orders(&cancels).await?;
-            for (result, &side) in results.iter().zip(cancel_sides.iter()) {
+            for (cancel, result) in cancels.iter().zip(results.iter()) {
                 if result.success {
-                    self.set_slot(side, None);
+                    let cid = cancel.client_id.as_deref().unwrap_or_default();
+                    for side in [Side::Buy, Side::Sell] {
+                        if self.slot(side).is_some_and(|s| s.client_id == cid) {
+                            self.set_slot(side, None);
+                        }
+                    }
                 } else {
                     tracing::warn!(
-                        ?side,
+                        client_id = ?cancel.client_id,
                         error = result.error.as_deref().unwrap_or("unknown"),
                         "simple-mm: cancel rejected — skipping replacement"
                     );
-                    failed_cancel_sides.insert(side);
                 }
             }
         }
 
-        // Drop placements for any side whose cancel failed — placing without
-        // cancelling would orphan the old order.
+        // Only place for sides whose slot is now clear — a filled cancel leaves
+        // the slot intact, so checking slot state naturally skips those sides.
         let (placements, new_slots): (Vec<_>, Vec<_>) = placements
             .into_iter()
             .zip(new_slots)
-            .filter(|(_, slot)| !failed_cancel_sides.contains(&slot.side))
+            .filter(|(_, slot)| self.slot(slot.side).is_none())
             .unzip();
 
         if !placements.is_empty() {
