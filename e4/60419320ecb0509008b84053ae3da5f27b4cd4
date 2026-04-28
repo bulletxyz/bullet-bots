@@ -1,0 +1,27 @@
+crates/bb-core/src/harness/testing.rs
+  053c5ac0773f4018 24,106-134,162-165,180,201-208,318-320
+crates/strategies/simple-mm/src/strategy.rs
+  053c5ac0773f4018 1-3,425,428-429,431,483-642
+crates/strategies/simple-mm/Cargo.toml
+  053c5ac0773f4018 20-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e460419320ecb0509008b84053ae3da5f27b4cd4",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 228,
+      "total_deletions": 15,
+      "accepted_lines": 254,
+      "overriden_lines": 0
+    }
+  }
+}
