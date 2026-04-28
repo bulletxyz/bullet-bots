@@ -4,7 +4,7 @@
   <img src="docs/assets/bullet-bots-banner.png" alt="bullet-bots: Rust trading bots for Bullet perpetuals">
 </p>
 
-[![CI](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml)
+[![CI](https://github.com/bulletxyz/bullet-bots/actions/workflows/ci.yml/badge.svg)](https://github.com/bulletxyz/bullet-bots/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 
@@ -104,6 +104,16 @@ and clarifies where to build extensions:
 - Rust 1.85+ (edition 2024)
 - `cargo +nightly fmt` for formatting (optional)
 
-## License
+## Risk Disclaimer
 
-MIT
+This is an open-source **reference implementation** intended for educational and research purposes. It is not a commercial product and does not constitute financial or investment advice.
+
+Automated trading strategies involve substantial financial risk. Bugs, network failures, exchange outages, adverse market conditions, and misconfiguration can all result in partial or total loss of capital. You are solely responsible for any funds you deploy using this software.
+
+By running this software against live markets you accept that:
+
+- The authors and contributors make no representations or warranties of any kind, express or implied, regarding the software's fitness for trading or any other purpose.
+- The authors and contributors shall not be liable for any financial losses, damages, or other claims arising from the use of this software.
+- Past behaviour in test or simulated environments is not indicative of future results in live markets.
+
+The MIT licence under which this software is distributed expressly disclaims all implied warranties and limits liability to the fullest extent permitted by applicable law. See [LICENSE](LICENSE).
