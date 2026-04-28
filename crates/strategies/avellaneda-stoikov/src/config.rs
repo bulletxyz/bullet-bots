@@ -275,14 +275,6 @@ impl ValidateConfig for AvellanedaStoikovConfig {
             if fees.min_spread_fee_multiplier < Decimal::ONE {
                 return Err("fees.min_spread_fee_multiplier must be >= 1".into());
             }
-            let total_spread = self.min_half_spread_bps * Decimal::from(2);
-            let required = Decimal::from(2) * fees.maker_bps * fees.min_spread_fee_multiplier;
-            if total_spread < required {
-                return Err(format!(
-                    "min total spread {total_spread} bps < required {required} bps \
-                     (2 * maker_bps * min_spread_fee_multiplier)"
-                ));
-            }
         }
         Ok(())
     }
