@@ -1,5 +1,9 @@
 # bullet-bots
 
+<p align="center">
+  <img src="docs/assets/bullet-bots-banner.png" alt="bullet-bots: Rust trading bots for Bullet perpetuals">
+</p>
+
 [![CI](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
