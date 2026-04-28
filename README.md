@@ -117,7 +117,3 @@ By running this software against live markets you accept that:
 - Past behaviour in test or simulated environments is not indicative of future results in live markets.
 
 The MIT licence under which this software is distributed expressly disclaims all implied warranties and limits liability to the fullest extent permitted by applicable law. See [LICENSE](LICENSE).
-
-## License
-
-MIT
