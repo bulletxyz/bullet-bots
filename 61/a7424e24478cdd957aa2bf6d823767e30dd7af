@@ -1,0 +1,33 @@
+crates/bb-core/src/clock.rs
+  399f7b5f311193aa 49
+crates/bb-bot/src/main.rs
+  399f7b5f311193aa 656
+crates/strategies/grid/src/ema.rs
+  399f7b5f311193aa 53,57
+crates/bb-core/src/harness/bus.rs
+  399f7b5f311193aa 81
+crates/bb-core/src/helpers/client_id.rs
+  399f7b5f311193aa 30
+crates/bb-core/src/events.rs
+  399f7b5f311193aa 100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "61a7424e24478cdd957aa2bf6d823767e30dd7af",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 9,
+      "total_deletions": 12,
+      "accepted_lines": 7,
+      "overriden_lines": 1
+    }
+  }
+}
