@@ -1,0 +1,23 @@
+crates/strategies/simple-mm/src/strategy.rs
+  053c5ac0773f4018 131,147,206,209-212,214,216,218,223-230,341-343
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d4b23abe6b9937d8bddadd96ab040f0008820035",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 21,
+      "total_deletions": 33,
+      "accepted_lines": 30,
+      "overriden_lines": 0
+    }
+  }
+}
