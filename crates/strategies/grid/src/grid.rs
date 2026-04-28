@@ -424,7 +424,10 @@ mod tests {
         s.suspend_all();
         assert!(s.paused);
         assert!(s.levels.iter().all(|l| l.state == LevelState::Dormant));
-        assert!(s.levels.iter().all(|l| l.filled_qty.is_zero()), "suspend_all must reset filled_qty");
+        assert!(
+            s.levels.iter().all(|l| l.filled_qty.is_zero()),
+            "suspend_all must reset filled_qty"
+        );
     }
 
     #[test]

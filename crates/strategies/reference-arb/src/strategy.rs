@@ -44,13 +44,29 @@ pub enum ExitReason {
 
 #[derive(Debug, Clone)]
 pub enum ArbState {
-    Flat { pending_signal_side: Option<Side>, pending_signal_streak: u32 },
-    Entering { client_id: String, side: Side, entry_spread_bps: Decimal },
-    Holding { side: Side, entry_spread_bps: Decimal, ticks: u32 },
+    Flat {
+        pending_signal_side: Option<Side>,
+        pending_signal_streak: u32,
+    },
+    Entering {
+        client_id: String,
+        side: Side,
+        entry_spread_bps: Decimal,
+    },
+    Holding {
+        side: Side,
+        entry_spread_bps: Decimal,
+        ticks: u32,
+    },
     /// `ticks_at_exit` preserves the hold counter so that if this exit is
     /// cancelled and we drop back to Holding, `max_hold_ticks` remains a hard
     /// bound — without it the counter would reset to 0 on every failed exit.
-    Exiting { client_id: String, reason: ExitReason, entry_side: Side, ticks_at_exit: u32 },
+    Exiting {
+        client_id: String,
+        reason: ExitReason,
+        entry_side: Side,
+        ticks_at_exit: u32,
+    },
 }
 
 impl ArbState {
@@ -826,8 +842,8 @@ mod tests {
     ///
     /// Event layout (6 rounds, one event per feed per round):
     ///
-    /// - Round 1: book sets `bullet_mid`=`100_150`; ref sets `binance_mid`=`100_000`
-    ///   → spread=+15bps, persistence streak=1 of 1 → ENTRY (Sell `cid`="1")
+    /// - Round 1: book sets `bullet_mid`=`100_150`; ref sets `binance_mid`=`100_000` →
+    ///   spread=+15bps, persistence streak=1 of 1 → ENTRY (Sell `cid`="1")
     /// - Round 2: padding; Trade `cid`="1" (Sell) → `Holding`
     /// - Rounds 3-4: padding refs (spread still 15bps, no exit)
     /// - Round 5: ref sets `binance_mid`=`100_120` → spread≈3bps ≤ `exit_threshold`(3) → TP EXIT

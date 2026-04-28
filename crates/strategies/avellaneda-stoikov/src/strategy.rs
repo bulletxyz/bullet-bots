@@ -1,8 +1,8 @@
 //! Avellaneda-Stoikov market maker as an event-driven actor.
 //!
 //! Two modes, selected by config:
-//!   - **Single-venue (default)**: `s` in the A-S formula comes from the trading venue's `BookUpdate`
-//!     mid. Faithful to the paper.
+//!   - **Single-venue (default)**: `s` in the A-S formula comes from the trading venue's
+//!     `BookUpdate` mid. Faithful to the paper.
 //!   - **Fair-value MM**: when `reference_exchange` is set, `s` comes from `ReferencePriceUpdate`
 //!     (e.g. Binance). The local book is still used for inventory tracking and would-cross checks
 //!     but no longer drives `last_mid` or the volatility estimator. The textbook A-S inventory skew
@@ -528,7 +528,9 @@ impl AvellanedaStoikovActor {
                     kept_slots.retain(|s| match s.order_id.as_deref() {
                         Some(oid) => {
                             live_oids.contains(oid)
-                                || s.client_id.as_deref().is_some_and(|c| live_client_ids.contains(c))
+                                || s.client_id
+                                    .as_deref()
+                                    .is_some_and(|c| live_client_ids.contains(c))
                         }
                         None => true,
                     });
@@ -546,8 +548,10 @@ impl AvellanedaStoikovActor {
                         .iter()
                         .filter(|o| {
                             let oid_tracked = tracked_oids.contains(o.id.as_str());
-                            let client_tracked =
-                                o.client_id.as_deref().is_some_and(|c| tracked_client_ids.contains(c));
+                            let client_tracked = o
+                                .client_id
+                                .as_deref()
+                                .is_some_and(|c| tracked_client_ids.contains(c));
                             !oid_tracked && !client_tracked
                         })
                         .map(|o| CancelOrder {
@@ -561,8 +565,10 @@ impl AvellanedaStoikovActor {
                         .iter()
                         .filter(|o| {
                             let oid_tracked = tracked_oids.contains(o.id.as_str());
-                            let client_tracked =
-                                o.client_id.as_deref().is_some_and(|c| tracked_client_ids.contains(c));
+                            let client_tracked = o
+                                .client_id
+                                .as_deref()
+                                .is_some_and(|c| tracked_client_ids.contains(c));
                             !oid_tracked && !client_tracked
                         })
                         .map(|o| {
@@ -709,7 +715,9 @@ impl EventHandler<BookUpdate> for AvellanedaStoikovActor {
         // In single-venue mode the local book is the price source. In
         // fair-value mode the reference feed owns `last_mid` / volatility,
         // so we only retain the book itself for would-cross checks.
-        if !self.uses_reference() && let Some(m) = event.orderbook.midpoint() {
+        if !self.uses_reference()
+            && let Some(m) = event.orderbook.midpoint()
+        {
             self.last_mid = Some(m);
             if let Some(f) = m.to_f64() {
                 self.volatility.push(f, Instant::now());
@@ -773,7 +781,8 @@ impl EventHandler<Trade> for AvellanedaStoikovActor {
         let event_order_id = Some(event.order_id.as_str()).filter(|s| !s.is_empty());
         self.slots.retain(|slot| {
             let cid_match = event_cid.is_some() && slot.client_id.as_deref() == event_cid;
-            let order_id_match = event_order_id.is_some() && slot.order_id.as_deref() == event_order_id;
+            let order_id_match =
+                event_order_id.is_some() && slot.order_id.as_deref() == event_order_id;
             !(cid_match || order_id_match)
         });
         // Force a re-quote on the next tick so both sides follow the new
@@ -841,9 +850,7 @@ impl EventHandler<Tick> for AvellanedaStoikovActor {
         if let Ok(broker) = cx.broker(self.exchange())
             && broker.is_disconnected()
         {
-            tracing::error!(
-                "broker reports permanent disconnect — requesting harness shutdown"
-            );
+            tracing::error!("broker reports permanent disconnect — requesting harness shutdown");
             cx.request_shutdown();
             return Ok(());
         }

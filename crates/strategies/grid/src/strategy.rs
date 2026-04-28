@@ -2,8 +2,8 @@
 //!
 //! Subscribed events:
 //!   - `BookUpdate` — cache mid / book for the initial anchor + trend filter.
-//!   - `Trade` — canonical source of inventory / `PnL`. On fill, marks the level dormant and re-arms
-//!     the adjacent level with the opposite side.
+//!   - `Trade` — canonical source of inventory / `PnL`. On fill, marks the level dormant and
+//!     re-arms the adjacent level with the opposite side.
 //!   - `OrderLifecycle` — learn exchange `order_ids`; mark cancel/reject levels Pending so the tick
 //!     re-places them.
 //!   - `Tick` — trend-filter evaluation, missing-order reconcile, place-pendings.

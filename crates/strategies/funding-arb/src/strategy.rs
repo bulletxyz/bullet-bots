@@ -166,13 +166,8 @@ impl FundingArbActor {
         let (short_res, long_res) =
             tokio::join!(short_b.place_orders(&short_orders), long_b.place_orders(&long_orders));
 
-        let short_ok = short_res
-            .as_ref()
-            .ok()
-            .and_then(|r| r.first())
-            .is_some_and(|r| r.success);
-        let long_ok =
-            long_res.as_ref().ok().and_then(|r| r.first()).is_some_and(|r| r.success);
+        let short_ok = short_res.as_ref().ok().and_then(|r| r.first()).is_some_and(|r| r.success);
+        let long_ok = long_res.as_ref().ok().and_then(|r| r.first()).is_some_and(|r| r.success);
 
         if let Err(e) = &short_res {
             tracing::error!(exchange = %short_ex, error = %e, "Short leg placement failed");
@@ -192,7 +187,9 @@ impl FundingArbActor {
             // been accepted on either venue to avoid leaving an unhedged leg.
             let _ = cx.broker(&short_ex)?.cancel_all_orders(self.symbol()).await;
             let _ = cx.broker(&long_ex)?.cancel_all_orders(self.symbol()).await;
-            tracing::warn!("Entry incomplete — cancelling all orders on both venues, returning to Flat");
+            tracing::warn!(
+                "Entry incomplete — cancelling all orders on both venues, returning to Flat"
+            );
             self.state.go_flat();
         }
         Ok(())
@@ -470,14 +467,14 @@ impl EventHandler<Tick> for FundingArbActor {
             tracing::warn!(exchange = %ex, "WS reconnect detected — reconciling positions");
             match broker.get_positions().await {
                 Ok(positions) => {
-                    let venue_pos = positions
-                        .iter()
-                        .find(|p| p.symbol == self.symbol())
-                        .map_or(Decimal::ZERO, |p| match p.side {
+                    let venue_pos = positions.iter().find(|p| p.symbol == self.symbol()).map_or(
+                        Decimal::ZERO,
+                        |p| match p.side {
                             Some(Side::Buy) => p.size,
                             Some(Side::Sell) => -p.size,
                             None => Decimal::ZERO,
-                        });
+                        },
+                    );
                     let our_pos = self.net_position(&ex);
                     if venue_pos != our_pos {
                         tracing::warn!(
@@ -647,9 +644,7 @@ mod tests {
             .wire_broker("bullet", bullet.clone() as Arc<dyn bb_core::broker::Broker>)
             .wire_broker("hl", hl.clone() as Arc<dyn bb_core::broker::Broker>)
             .wire_feed_named("marks", marks)
-            .wire_actor(
-                ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>(),
-            )
+            .wire_actor(ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>())
             .build()
             .unwrap();
         harness.run().await.unwrap();
@@ -669,9 +664,7 @@ mod tests {
         let hl = MockBroker::shared("hl");
 
         // Reject both legs.
-        bullet
-            .queue_place_response(Err(BotError::exchange("venue error", false)))
-            .await;
+        bullet.queue_place_response(Err(BotError::exchange("venue error", false))).await;
         hl.queue_place_response(Err(BotError::exchange("venue error", false))).await;
 
         // Wide spread triggers entry on the second mark event.
@@ -685,9 +678,7 @@ mod tests {
             .wire_broker("bullet", bullet.clone() as Arc<dyn bb_core::broker::Broker>)
             .wire_broker("hl", hl.clone() as Arc<dyn bb_core::broker::Broker>)
             .wire_feed_named("marks", marks)
-            .wire_actor(
-                ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>(),
-            )
+            .wire_actor(ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>())
             .build()
             .unwrap();
         harness.run().await.unwrap();
@@ -741,9 +732,9 @@ mod tests {
             mark("bullet", "100", Some("0.00005")), // [8] padding
         ]);
         let trades = ScriptedFeed::new(vec![
-            foreign_trade(),                 // [0] skip
-            foreign_trade(),                 /* [1] skip (entry fires in this round — fills not
-                                              * yet) */
+            foreign_trade(), // [0] skip
+            foreign_trade(), /* [1] skip (entry fires in this round — fills not
+                              * yet) */
             foreign_trade(),                 // [2] skip
             fill("bullet", Side::Sell, "1"), // [3] short leg filled (cid="1" guaranteed in my_ids)
             fill("hl", Side::Buy, "2"),      // [4] long leg filled
