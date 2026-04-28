@@ -1,4 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use async_trait::async_trait;
 use bb_core::error::BotError;
@@ -420,11 +422,13 @@ impl EventHandler<Tick> for SimpleMmActor {
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use bb_core::broker::Broker;
-    use bb_core::events::BookUpdate;
-    use bb_core::harness::testing::{MockBroker, ScriptedFeed};
+    use bb_core::events::{BookUpdate, OrderLifecycle, Trade};
+    use bb_core::harness::testing::{MockBroker, ScriptedFeed, TimedFeed};
     use bb_core::harness::{ActorSpec, HarnessBuilder};
+    use bb_core::types::{CancelResult, Order, OrderBook, OrderStatus, OrderType, Side};
 
     use super::*;
 
@@ -475,5 +479,165 @@ mod tests {
 
         harness.run().await.unwrap();
         assert_eq!(broker.placed_count().await, 0);
+    }
+
+    fn live_config() -> SimpleMmConfig {
+        SimpleMmConfig { dry_run: false, refresh_secs: 1, ..config() }
+    }
+
+    fn trade_event(side: Side, price: &str) -> Trade {
+        Trade {
+            exchange: "bullet".into(),
+            symbol: "BTC-USD".into(),
+            order_id: "test-1".into(),
+            trade_id: None,
+            client_id: None,
+            side,
+            price: d(price),
+            quantity: d("0.001"),
+            timestamp: None,
+        }
+    }
+
+    fn lifecycle_filled(order_id: &str, side: Side, price: &str) -> OrderLifecycle {
+        OrderLifecycle {
+            exchange: "bullet".into(),
+            order: Order {
+                id: order_id.to_string(),
+                client_id: None,
+                symbol: "BTC-USD".into(),
+                side,
+                order_type: OrderType::PostOnly,
+                price: d(price),
+                quantity: d("0.001"),
+                filled_quantity: d("0.001"),
+                status: OrderStatus::Filled,
+            },
+        }
+    }
+
+    /// A Trade (partial fill) must NOT clear the quote slot. On the next refresh
+    /// the resting order should be cancelled before the replacement is placed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn partial_fill_preserves_slot() {
+        tokio::time::pause();
+        let broker = MockBroker::shared("bullet");
+        let actor = SimpleMmActor::new(live_config());
+
+        // book1 at t=0 places bid+ask; book2 at t=1100ms triggers the second refresh
+        // (refresh_secs=1, so the 1s timer must elapse).
+        let book_feed = TimedFeed::new(vec![
+            (Duration::ZERO, book_update("99", "101")),
+            (Duration::from_millis(1100), book_update("99", "101")),
+        ]);
+        // Trade arrives at t=500ms (between the two book updates).
+        let trade_feed = TimedFeed::new(vec![(
+            Duration::from_millis(500),
+            trade_event(Side::Buy, "99.9"),
+        )]);
+
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", broker.clone() as Arc<dyn Broker>)
+            .wire_feed_named("book", book_feed)
+            .wire_feed_named("trades", trade_feed)
+            .wire_actor(
+                ActorSpec::new("simple-mm", actor).sub::<BookUpdate>().sub::<Trade>(),
+            )
+            .build()
+            .unwrap();
+
+        harness.run().await.unwrap();
+
+        // Both slots should be cancelled on the second refresh — the Trade must not
+        // have cleared the bid slot prematurely.
+        assert_eq!(
+            broker.last_cancels().await.len(),
+            2,
+            "partial fill must not evict the slot; both sides need cancel+replace"
+        );
+    }
+
+    /// An `OrderLifecycle::Filled` event must clear the quote slot so the next
+    /// refresh re-quotes that side fresh (without first trying to cancel a phantom).
+    #[tokio::test(flavor = "current_thread")]
+    async fn order_lifecycle_filled_clears_slot() {
+        tokio::time::pause();
+        let broker = MockBroker::shared("bullet");
+        let actor = SimpleMmActor::new(live_config());
+
+        // book1 places bid+ask. MockBroker assigns order IDs monotonically from 1,
+        // so bids get "test-1" and asks get "test-2".
+        let book_feed = TimedFeed::new(vec![
+            (Duration::ZERO, book_update("99", "101")),
+            (Duration::from_millis(1100), book_update("99", "101")),
+        ]);
+        // Filled event for the bid order arrives between the two book updates.
+        let lifecycle_feed = TimedFeed::new(vec![(
+            Duration::from_millis(500),
+            lifecycle_filled("test-1", Side::Buy, "99.9"),
+        )]);
+
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", broker.clone() as Arc<dyn Broker>)
+            .wire_feed_named("book", book_feed)
+            .wire_feed_named("lifecycle", lifecycle_feed)
+            .wire_actor(
+                ActorSpec::new("simple-mm", actor)
+                    .sub::<BookUpdate>()
+                    .sub::<OrderLifecycle>(),
+            )
+            .build()
+            .unwrap();
+
+        harness.run().await.unwrap();
+
+        // Bid slot was cleared by Filled event → second refresh should only cancel
+        // the ask (bid has no resting order to cancel).
+        assert_eq!(
+            broker.last_cancels().await.len(),
+            1,
+            "filled bid slot must be gone; only ask side needs a cancel on next refresh"
+        );
+    }
+
+    /// When a cancel is rejected by the exchange, the replacement order for that
+    /// side must be skipped. Placing a new order while the old one still rests
+    /// would create a double position.
+    #[tokio::test(flavor = "current_thread")]
+    async fn failed_cancel_skips_placement() {
+        tokio::time::pause();
+        let broker = MockBroker::shared("bullet");
+        let actor = SimpleMmActor::new(live_config());
+
+        // On the second book update both slots get cancel-requested.
+        // Bid cancel fails; ask cancel succeeds.
+        broker
+            .queue_cancel_results(vec![
+                CancelResult { order_id: String::new(), success: false, error: Some("rejected".into()) },
+                CancelResult { order_id: String::new(), success: true, error: None },
+            ])
+            .await;
+
+        // 1100ms gap ensures the refresh_secs=1 timer elapses before the second update.
+        let book_feed = TimedFeed::new(vec![
+            (Duration::ZERO, book_update("99", "101")),           // places bid+ask
+            (Duration::from_millis(1100), book_update("99", "101")), // cancel (bid fails) + re-place
+        ]);
+
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", broker.clone() as Arc<dyn Broker>)
+            .wire_feed_named("book", book_feed)
+            .wire_actor(ActorSpec::new("simple-mm", actor).sub::<BookUpdate>())
+            .build()
+            .unwrap();
+
+        harness.run().await.unwrap();
+
+        // Only ask should be re-placed (bid cancel failed → bid slot occupied → skip).
+        assert_eq!(
+            broker.last_placed_orders().await.len(),
+            1,
+            "failed cancel must block the replacement order for that side"
+        );
     }
 }

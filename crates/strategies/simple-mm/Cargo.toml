@@ -17,5 +17,8 @@ rust_decimal = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [lib]
 doctest = false
