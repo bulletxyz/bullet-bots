@@ -1,0 +1,64 @@
+crates/bb-bot/src/main.rs
+  49e47850c6df668f 14,25,197-214,217-246,257,301,341,379,403,417-420,423,427-430,435,439
+crates/strategies/simple-mm/Cargo.toml
+  053c5ac0773f4018 1-5,7-9
+crates/strategies/funding-arb/src/config.rs
+  053c5ac0773f4018 1,91-92,115-117
+crates/exchanges/bullet/src/connection.rs
+  053c5ac0773f4018 85
+crates/strategies/simple-mm/src/strategy.rs
+  053c5ac0773f4018 121-123,342-352
+  49e47850c6df668f 87-89,174-226,380-418
+HACKING.md
+  053c5ac0773f4018 3-8
+AGENTS.md
+  053c5ac0773f4018 31,44,230,236,284-285,292-294
+crates/strategies/avellaneda-stoikov/src/config.rs
+  053c5ac0773f4018 1,223-278,280-295
+  49e47850c6df668f 279
+crates/strategies/avellaneda-stoikov/src/strategy.rs
+  053c5ac0773f4018 640-642
+Cargo.toml
+  053c5ac0773f4018 40
+README.md
+  053c5ac0773f4018 11,40-41,43-46,49-57,60-61,63,68-76,82,112-114
+crates/strategies/simple-mm/README.md
+  053c5ac0773f4018 1-48
+crates/strategies/simple-mm/src/config.rs
+  49e47850c6df668f 107
+crates/bb-bot/Cargo.toml
+  053c5ac0773f4018 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "8117886fe757c99296eb58805e8bc4a90b64910b",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 223,
+      "total_deletions": 38,
+      "accepted_lines": 209,
+      "overriden_lines": 2
+    },
+    "49e47850c6df668f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019dd258-7c87-7412-a3ee-c9c6ef8e49c0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 52,
+      "total_deletions": 26,
+      "accepted_lines": 49,
+      "overriden_lines": 0
+    }
+  }
+}
