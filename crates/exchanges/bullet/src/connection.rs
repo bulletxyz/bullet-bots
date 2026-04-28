@@ -82,6 +82,7 @@ pub async fn connect(
             UserActionDiscriminants::PlaceOrders,
             UserActionDiscriminants::CancelOrders,
             UserActionDiscriminants::CancelMarketOrders,
+            UserActionDiscriminants::AmendOrders,
         ])
         .build()
         .await

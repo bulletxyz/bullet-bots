@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bb_core::broker::Broker;
-use bb_core::config::EngineConfig;
+use bb_core::config::{EngineConfig, ValidateConfig};
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{ActorSpec, HarnessBuilder};
 use bb_core::helpers::TickFeed;
@@ -22,6 +22,7 @@ use bb_strategy_avellaneda_stoikov::{AvellanedaStoikovActor, AvellanedaStoikovCo
 use bb_strategy_funding_arb::{FundingArbActor, FundingArbConfig};
 use bb_strategy_grid::{GridActor, GridConfig};
 use bb_strategy_reference_arb::{ReferenceArbActor, ReferenceArbConfig};
+use bb_strategy_simple_mm::{SimpleMmActor, SimpleMmConfig};
 use bullet_rust_sdk::types::bullet_exchange_interface;
 use bullet_rust_sdk::{
     CallMessage, Client, Keypair, Network, PositiveDecimal, Transaction, UserAction,
@@ -193,7 +194,55 @@ where
     Ok(parsed)
 }
 
+fn validate_strategy_config<T>(
+    strategy: &StrategyEntry,
+    sub_name: &str,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    T: serde::de::DeserializeOwned + ValidateConfig,
+{
+    let cfg: T = sub_strategy(strategy, sub_name)?;
+    cfg.validate().map_err(|e| format!("{sub_name} config invalid: {e}").into())
+}
+
+fn with_status(builder: HarnessBuilder, engine: &EngineConfig) -> HarnessBuilder {
+    match engine.status_bind {
+        Some(addr) => builder.with_status_bind(addr),
+        None => builder.with_status_port(engine.status_port),
+    }
+}
+
 // -- Dispatch: one function per strategy type -------------------------------
+
+async fn run_simple_mm(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let bullet_cfg: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
+    let mm_cfg: SimpleMmConfig = sub_strategy(&config.strategy, "simple-mm")?;
+
+    let (broker, feeds) = connect_bullet(&bullet_cfg, &mm_cfg.symbol).await?;
+    let broker: Arc<dyn Broker> = Arc::new(broker);
+
+    let actor = SimpleMmActor::new(mm_cfg);
+    let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
+
+    let harness = with_status(HarnessBuilder::new(), &config.engine)
+        .enable_signal_shutdown()
+        .wire_broker("bullet", broker)
+        .wire_feed_named("bullet-trades", feeds.trade)
+        .wire_feed_named("bullet-book", feeds.book)
+        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
+        .wire_feed_named("ticks", tick)
+        .wire_actor(
+            ActorSpec::new("simple-mm", actor)
+                .sub::<BookUpdate>()
+                .sub_critical::<Trade>()
+                .sub_critical::<OrderLifecycle>()
+                .sub::<Tick>(),
+        )
+        .build()?;
+    let reason = harness.run().await?;
+    tracing::info!(?reason, "Harness wound down");
+    Ok(())
+}
 
 async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let bullet_cfg: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
@@ -205,9 +254,8 @@ async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let grid = GridActor::new(grid_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
+    let harness = with_status(HarnessBuilder::new(), &config.engine)
         .enable_signal_shutdown()
-        .with_status_port(config.engine.status_port)
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
         .wire_feed_named("bullet-book", feeds.book)
@@ -250,9 +298,8 @@ async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::er
     let actor = AvellanedaStoikovActor::new(strat_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let mut builder = HarnessBuilder::new()
+    let mut builder = with_status(HarnessBuilder::new(), &config.engine)
         .enable_signal_shutdown()
-        .with_status_port(config.engine.status_port)
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
         .wire_feed_named("bullet-book", feeds.book)
@@ -291,9 +338,8 @@ async fn run_funding_arb(config: AppConfig) -> Result<(), Box<dyn std::error::Er
     let actor = FundingArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
+    let harness = with_status(HarnessBuilder::new(), &config.engine)
         .enable_signal_shutdown()
-        .with_status_port(config.engine.status_port)
         .wire_broker("bullet", bullet_broker)
         .wire_broker("hyperliquid", hl_broker)
         .wire_feed_named("bullet-trades", bullet_feeds.trade)
@@ -330,9 +376,8 @@ async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::
     let actor = ReferenceArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
+    let harness = with_status(HarnessBuilder::new(), &config.engine)
         .enable_signal_shutdown()
-        .with_status_port(config.engine.status_port)
         .wire_broker("bullet", broker)
         .wire_feed_named("bullet-trades", feeds.trade)
         .wire_feed_named("bullet-book", feeds.book)
@@ -355,6 +400,7 @@ async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::
 
 async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     match config.strategy.strategy_type.as_str() {
+        "simple-mm" => run_simple_mm(config).await,
         "grid" => run_grid(config).await,
         "avellaneda-stoikov" => run_avellaneda_stoikov(config).await,
         "funding-arb" => run_funding_arb(config).await,
@@ -368,31 +414,38 @@ async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 fn validate(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let stype = config.strategy.strategy_type.as_str();
     match stype {
+        "simple-mm" => {
+            let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
+            validate_strategy_config::<SimpleMmConfig>(&config.strategy, "simple-mm")?;
+        }
         "grid" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
-            let _: GridConfig = sub_strategy(&config.strategy, "grid")?;
+            validate_strategy_config::<GridConfig>(&config.strategy, "grid")?;
         }
         "avellaneda-stoikov" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
-            let _: AvellanedaStoikovConfig = sub_strategy(&config.strategy, "avellaneda-stoikov")?;
+            validate_strategy_config::<AvellanedaStoikovConfig>(
+                &config.strategy,
+                "avellaneda-stoikov",
+            )?;
         }
         "funding-arb" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
             let _: HyperliquidConfig = parse_exchange_config(&config.exchanges, "hyperliquid")?;
-            let _: FundingArbConfig = sub_strategy(&config.strategy, "funding-arb")?;
+            validate_strategy_config::<FundingArbConfig>(&config.strategy, "funding-arb")?;
         }
         "reference-arb" => {
             let _: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
-            let cfg: ReferenceArbConfig = sub_strategy(&config.strategy, "reference-arb")?;
-            cfg.validate().map_err(|e| format!("reference-arb config invalid: {e}"))?;
+            validate_strategy_config::<ReferenceArbConfig>(&config.strategy, "reference-arb")?;
         }
         other => return Err(format!("Unknown strategy type: {other}").into()),
     }
     println!("Config is valid ({stype}).");
     println!("  Engine: tick={}ms", config.engine.tick_interval_ms);
-    match config.engine.status_port {
-        Some(p) => println!("  Status API: port {p}"),
-        None => println!("  Status API: disabled"),
+    match (config.engine.status_bind, config.engine.status_port) {
+        (Some(addr), _) => println!("  Status API: {addr}"),
+        (None, Some(p)) => println!("  Status API: port {p}"),
+        (None, None) => println!("  Status API: disabled"),
     }
     Ok(())
 }

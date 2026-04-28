@@ -1,3 +1,4 @@
+use bb_core::config::ValidateConfig;
 use bb_core::types::OrderType;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -120,10 +121,16 @@ impl GridConfig {
         (self.upper_price - self.lower_price) / Decimal::from(self.num_levels as u64 - 1)
     }
 
+    pub fn validate(&self) -> Result<(), String> {
+        <Self as ValidateConfig>::validate(self)
+    }
+}
+
+impl ValidateConfig for GridConfig {
     /// Validate the config at startup. Returns a readable error for common
     /// misconfigurations rather than letting them surface as weird runtime
     /// behavior.
-    pub fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         if self.num_levels < 2 {
             return Err("num_levels must be ≥ 2".to_string());
         }

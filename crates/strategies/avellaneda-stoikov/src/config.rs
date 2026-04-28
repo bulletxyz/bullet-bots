@@ -1,3 +1,4 @@
+use bb_core::config::ValidateConfig;
 use bb_core::types::OrderType;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -218,4 +219,77 @@ fn default_reference_market() -> String {
 
 fn default_reference_stale_secs() -> u64 {
     10
+}
+
+impl ValidateConfig for AvellanedaStoikovConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.order_size <= Decimal::ZERO {
+            return Err("order_size must be positive".into());
+        }
+        if self.max_position < self.order_size {
+            return Err("max_position must be >= order_size".into());
+        }
+        if self.gamma <= Decimal::ZERO {
+            return Err("gamma must be positive".into());
+        }
+        if self.kappa <= Decimal::ZERO {
+            return Err("kappa must be positive".into());
+        }
+        if self.order_horizon_secs == 0 {
+            return Err("order_horizon_secs must be >= 1".into());
+        }
+        if self.vol_window_secs == 0 {
+            return Err("vol_window_secs must be >= 1".into());
+        }
+        if self.min_half_spread_bps <= Decimal::ZERO {
+            return Err("min_half_spread_bps must be positive".into());
+        }
+        if self.max_half_spread_bps < self.min_half_spread_bps {
+            return Err("max_half_spread_bps must be >= min_half_spread_bps".into());
+        }
+        if self.order_levels == 0 {
+            return Err("order_levels must be >= 1".into());
+        }
+        if self.order_level_spread_bps < Decimal::ZERO {
+            return Err("order_level_spread_bps must be non-negative".into());
+        }
+        if self.order_level_amount_step < Decimal::ZERO {
+            return Err("order_level_amount_step must be non-negative".into());
+        }
+        if self.amend_threshold_bps < Decimal::ZERO {
+            return Err("amend_threshold_bps must be non-negative".into());
+        }
+        if self.amend_threshold_step_bps < Decimal::ZERO {
+            return Err("amend_threshold_step_bps must be non-negative".into());
+        }
+        if self.reference_exchange.is_some() && self.reference_symbol.is_none() {
+            return Err("reference_exchange requires reference_symbol".into());
+        }
+        if self.reference_stale_secs == 0 {
+            return Err("reference_stale_secs must be >= 1".into());
+        }
+        if let Some(fees) = &self.fees {
+            if fees.maker_bps < Decimal::ZERO {
+                return Err("fees.maker_bps must be non-negative".into());
+            }
+            if fees.min_spread_fee_multiplier < Decimal::ONE {
+                return Err("fees.min_spread_fee_multiplier must be >= 1".into());
+            }
+            let total_spread = self.min_half_spread_bps * Decimal::from(2);
+            let required = Decimal::from(2) * fees.maker_bps * fees.min_spread_fee_multiplier;
+            if total_spread < required {
+                return Err(format!(
+                    "min total spread {total_spread} bps < required {required} bps \
+                     (2 * maker_bps * min_spread_fee_multiplier)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AvellanedaStoikovConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        <Self as ValidateConfig>::validate(self)
+    }
 }

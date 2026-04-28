@@ -637,6 +637,9 @@ impl AvellanedaStoikovActor {
 #[async_trait]
 impl Actor for AvellanedaStoikovActor {
     async fn init(&mut self, cx: &ActorContext) -> Result<(), BotError> {
+        self.config
+            .validate()
+            .map_err(|e| BotError::config(format!("avellaneda-stoikov config invalid: {e}")))?;
         self.check_fee_floor()?;
         let broker = cx.broker(self.exchange())?;
         broker.cancel_all_orders(self.symbol()).await?;

@@ -1,3 +1,4 @@
+use bb_core::config::ValidateConfig;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -87,8 +88,8 @@ fn default_min_flat_hold_secs() -> u64 {
     60
 }
 
-impl FundingArbConfig {
-    pub fn validate(&self) -> Result<(), String> {
+impl ValidateConfig for FundingArbConfig {
+    fn validate(&self) -> Result<(), String> {
         if self.order_size <= Decimal::ZERO {
             return Err("order_size must be positive".into());
         }
@@ -108,6 +109,12 @@ impl FundingArbConfig {
             return Err("slippage must be non-negative".into());
         }
         Ok(())
+    }
+}
+
+impl FundingArbConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        <Self as ValidateConfig>::validate(self)
     }
 }
 
