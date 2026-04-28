@@ -618,8 +618,7 @@ mod tests {
         // 1100ms gap ensures the refresh_secs=1 timer elapses before the second update.
         let book_feed = TimedFeed::new(vec![
             (Duration::ZERO, book_update("99", "101")), // places bid+ask
-            (Duration::from_millis(1100), book_update("99", "101")), /* cancel (bid fails) +
-                                                                      * re-place */
+            (Duration::from_millis(1100), book_update("99", "101")), // cancel (bid fails) + re-place
         ]);
 
         let harness = HarnessBuilder::new()
