@@ -1,0 +1,25 @@
+crates/strategies/simple-mm/src/strategy.rs
+  053c5ac0773f4018 226
+crates/bb-bot/src/main.rs
+  053c5ac0773f4018 227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d341189e11009c5333b8e897dd5d3dfaa811534d",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 1,
+      "accepted_lines": 40,
+      "overriden_lines": 0
+    }
+  }
+}
