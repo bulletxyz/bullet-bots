@@ -10,7 +10,7 @@
 
 Live-trading-capable reference framework for [Bullet](https://bullet.xyz) perpetuals and other exchanges — written in Rust, with a small typed runtime for building event-driven bots.
 
-Ships with exchange adapters for Bullet, Hyperliquid, and Binance, plus four ready-to-run strategies you can use out of the box or extend with your own logic.
+Ships with exchange adapters for Bullet, Hyperliquid, and Binance, plus five ready-to-run strategies you can use out of the box or extend with your own logic.
 
 ## Architecture at a glance
 
