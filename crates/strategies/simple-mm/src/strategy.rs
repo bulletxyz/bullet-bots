@@ -223,7 +223,7 @@ impl SimpleMmActor {
             }
         }
 
-        // Only place for sides whose slot is now clear — a filled cancel leaves
+        // Only place for sides whose slot is now clear — a rejected cancel leaves
         // the slot intact, so checking slot state naturally skips those sides.
         let (placements, new_slots): (Vec<_>, Vec<_>) = placements
             .into_iter()
