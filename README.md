@@ -1,8 +1,12 @@
-# bullet-bots
+<p align="center">
+  <img src="docs/banner.svg" alt="bullet-bots" width="900"/>
+</p>
 
-[![CI](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+<p align="center">
+  <a href="https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml"><img src="https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-1.85+-orange.svg" alt="Rust 1.85+"/></a>
+</p>
 
 Production-grade, open-source trading bot framework for [Bullet](https://bullet.xyz) perpetuals and other exchanges — written in Rust, built for latency-sensitive environments.
 
