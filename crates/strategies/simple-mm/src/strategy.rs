@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use tokio::time::Instant;
-
 use async_trait::async_trait;
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, OrderLifecycle, Tick, Trade};
@@ -10,6 +8,7 @@ use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
 use bb_core::types::{CancelOrder, NewOrder, OrderBook, OrderStatus, Side};
 use rust_decimal::Decimal;
 use serde::Serialize;
+use tokio::time::Instant;
 
 use crate::config::SimpleMmConfig;
 
@@ -531,18 +530,14 @@ mod tests {
             (Duration::from_millis(1100), book_update("99", "101")),
         ]);
         // Trade arrives at t=500ms (between the two book updates).
-        let trade_feed = TimedFeed::new(vec![(
-            Duration::from_millis(500),
-            trade_event(Side::Buy, "99.9"),
-        )]);
+        let trade_feed =
+            TimedFeed::new(vec![(Duration::from_millis(500), trade_event(Side::Buy, "99.9"))]);
 
         let harness = HarnessBuilder::new()
             .wire_broker("bullet", broker.clone() as Arc<dyn Broker>)
             .wire_feed_named("book", book_feed)
             .wire_feed_named("trades", trade_feed)
-            .wire_actor(
-                ActorSpec::new("simple-mm", actor).sub::<BookUpdate>().sub::<Trade>(),
-            )
+            .wire_actor(ActorSpec::new("simple-mm", actor).sub::<BookUpdate>().sub::<Trade>())
             .build()
             .unwrap();
 
@@ -582,9 +577,7 @@ mod tests {
             .wire_feed_named("book", book_feed)
             .wire_feed_named("lifecycle", lifecycle_feed)
             .wire_actor(
-                ActorSpec::new("simple-mm", actor)
-                    .sub::<BookUpdate>()
-                    .sub::<OrderLifecycle>(),
+                ActorSpec::new("simple-mm", actor).sub::<BookUpdate>().sub::<OrderLifecycle>(),
             )
             .build()
             .unwrap();
@@ -613,15 +606,20 @@ mod tests {
         // Bid cancel fails; ask cancel succeeds.
         broker
             .queue_cancel_results(vec![
-                CancelResult { order_id: String::new(), success: false, error: Some("rejected".into()) },
+                CancelResult {
+                    order_id: String::new(),
+                    success: false,
+                    error: Some("rejected".into()),
+                },
                 CancelResult { order_id: String::new(), success: true, error: None },
             ])
             .await;
 
         // 1100ms gap ensures the refresh_secs=1 timer elapses before the second update.
         let book_feed = TimedFeed::new(vec![
-            (Duration::ZERO, book_update("99", "101")),           // places bid+ask
-            (Duration::from_millis(1100), book_update("99", "101")), // cancel (bid fails) + re-place
+            (Duration::ZERO, book_update("99", "101")), // places bid+ask
+            (Duration::from_millis(1100), book_update("99", "101")), /* cancel (bid fails) +
+                                                                      * re-place */
         ]);
 
         let harness = HarnessBuilder::new()
