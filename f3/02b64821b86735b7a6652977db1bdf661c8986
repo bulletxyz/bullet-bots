@@ -1,0 +1,23 @@
+crates/bb-core/src/harness/mod.rs
+  053c5ac0773f4018 92-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "f302b64821b86735b7a6652977db1bdf661c8986",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 1,
+      "accepted_lines": 41,
+      "overriden_lines": 0
+    }
+  }
+}
