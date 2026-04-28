@@ -1,0 +1,23 @@
+config/grid-example.toml
+  399f7b5f311193aa 34-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b709d33a1f2a36e7d7456f28ed551a248f337a82",
+  "prompts": {
+    "399f7b5f311193aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00bb2cf0-9127-4e6d-91ce-c527e2cb202e",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 332,
+      "overriden_lines": 0
+    }
+  }
+}
