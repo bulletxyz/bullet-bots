@@ -1,8 +1,12 @@
 # bullet-bots
 
-Open-source event-driven trading bot framework for the [Bullet](https://bullet.xyz)
-perpetual futures DEX and other exchanges. Ships with adapters for Bullet,
-Hyperliquid, and Binance, plus four ready-to-run strategies.
+[![CI](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtristan/bullet-bots/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+
+Production-grade, open-source trading bot framework for [Bullet](https://bullet.xyz) perpetuals and other exchanges — written in Rust, built for latency-sensitive environments.
+
+Ships with exchange adapters for Bullet, Hyperliquid, and Binance, plus four ready-to-run strategies you can use out of the box or extend with your own logic.
 
 ## Architecture at a glance
 
