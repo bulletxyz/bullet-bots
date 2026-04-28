@@ -50,11 +50,11 @@ mod tests {
         assert_eq!(ema.update(100.0, t0), 100.0);
 
         // Step up to 200; after 1 tau (~60s) we're ~63% of the way.
-        let v = ema.update(200.0, t0 + Duration::from_secs(60));
+        let v = ema.update(200.0, t0 + Duration::from_mins(1));
         assert!(v > 160.0 && v < 165.0, "expected ~163, got {v}");
 
         // After a long time relative to tau, should be very close to 200.
-        let v = ema.update(200.0, t0 + Duration::from_secs(600));
+        let v = ema.update(200.0, t0 + Duration::from_mins(10));
         assert!((v - 200.0).abs() < 0.5, "expected ~200, got {v}");
     }
 

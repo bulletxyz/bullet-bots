@@ -78,7 +78,7 @@ impl EventBus {
 
 impl std::fmt::Debug for EventBus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let len = self.inner.lock().map(|g| g.channels.len()).unwrap_or(0);
+        let len = self.inner.lock().map_or(0, |g| g.channels.len());
         f.debug_struct("EventBus").field("channels", &len).finish()
     }
 }

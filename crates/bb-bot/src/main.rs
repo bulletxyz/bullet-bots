@@ -653,8 +653,7 @@ impl ObserverActor {
         let spread_bps = (b - r) / r * Decimal::from(10_000);
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis());
         writeln!(self.file, "{ts},{b},{r},{spread_bps}")?;
         self.last_written = Some((b, r));
         self.rows += 1;

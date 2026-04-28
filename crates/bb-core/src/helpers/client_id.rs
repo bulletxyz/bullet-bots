@@ -27,8 +27,7 @@ impl ClientIdIssuer {
     pub fn session_seeded() -> Self {
         let epoch_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         Self::starting_at(epoch_secs * 10_000)
     }
 
