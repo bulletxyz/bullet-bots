@@ -343,7 +343,6 @@ dependencies = [
  "rust_decimal",
  "secrecy",
  "serde",
- "serde_json",
  "tokio",
  "toml",
  "tracing",
@@ -356,7 +355,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "futures-util",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -371,7 +369,6 @@ dependencies = [
 name = "bb-exchange-binance"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bb-core",
  "futures-util",
  "rust_decimal",
@@ -392,7 +389,6 @@ dependencies = [
  "rust_decimal",
  "secrecy",
  "serde",
- "serde_json",
  "tokio",
  "toml",
  "tracing",
@@ -409,7 +405,6 @@ dependencies = [
  "rust_decimal",
  "secrecy",
  "serde",
- "serde_json",
  "tokio",
  "toml",
  "tracing",
@@ -426,7 +421,6 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 

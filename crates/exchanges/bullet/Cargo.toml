@@ -13,7 +13,6 @@ bb-core = { workspace = true }
 bullet-rust-sdk = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 rust_decimal = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
@@ -21,3 +20,6 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }
+
+[lib]
+doctest = false

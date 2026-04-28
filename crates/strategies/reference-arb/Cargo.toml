@@ -17,3 +17,6 @@ serde_json = { workspace = true }
 rust_decimal = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+
+[lib]
+doctest = false
