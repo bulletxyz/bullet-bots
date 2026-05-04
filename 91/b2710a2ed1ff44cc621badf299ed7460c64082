@@ -1,0 +1,36 @@
+Cargo.toml
+  dc0eef5a11244948 46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "91b2710a2ed1ff44cc621badf299ed7460c64082",
+  "prompts": {
+    "053c5ac0773f4018": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "021b3264-909d-4afe-b5f9-3d2deacf8b44",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 38,
+      "overriden_lines": 0
+    },
+    "dc0eef5a11244948": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1fc8d16e-78c9-435b-8565-f5c8c7d88e2e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tristan",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
