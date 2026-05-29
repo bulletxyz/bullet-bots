@@ -41,19 +41,27 @@ cargo nextest run
 cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml
 
 # Generate a Bullet testnet key, fund it with the printed faucet curl,
-# then run the starter market maker.
+# deposit into the perp margin account, then run the starter market maker.
 cargo run --bin bb-bot -- keygen --network testnet
+# ...run the faucet curl printed above, then deposit into the margin account:
+cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000
 cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
 ```
 
 Recommended first path:
 
 1. `keygen` — create a testnet key.
-2. Fund it with the faucet command printed by `keygen`.
-3. `observe` — collect Bullet/Binance spread data without trading.
-4. `validate` — preflight the config.
-5. `run` — start tiny, watch logs plus `GET /status`.
-6. `flatten` — cancel and close manually if you need to clean up.
+2. Fund it with the faucet command printed by `keygen`. The faucet credits your
+   on-chain wallet, not your trading account. The faucet is **testnet only** —
+   on mainnet you fund the wallet with real bridged/deposited assets instead.
+3. `deposit` — move funds from the on-chain wallet into the perp margin account
+   (e.g. `deposit --asset USDC --amount 5000`). This also initializes the
+   trading account; without it, order placement fails with `user_variants not
+   found`.
+4. `observe` — collect Bullet/Binance spread data without trading.
+5. `validate` — preflight the config.
+6. `run` — start tiny, watch logs plus `GET /status`.
+7. `flatten` — cancel and close manually if you need to clean up.
 
 ## Key management
 
