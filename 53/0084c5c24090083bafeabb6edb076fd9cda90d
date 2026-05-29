@@ -1,0 +1,22 @@
+AGENTS.md
+  s_3aeee9d31a3a23::t_67e285e4cde48c 41-50
+README.md
+  s_3aeee9d31a3a23::t_c8f22cccaf3d86 44,46-47,54,57-64
+  s_3aeee9d31a3a23::t_a7b3e8f6db389a 55-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "530084c5c24090083bafeabb6edb076fd9cda90d",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
