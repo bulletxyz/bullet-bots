@@ -38,6 +38,17 @@ cargo run --bin bb-bot -- keygen --network testnet
 # → writes ~/.config/bullet/id.json (0600), prints address + faucet curl
 ```
 
+Fund and onboard the account (first time). The faucet credits the on-chain
+wallet (**testnet only** — on mainnet you fund the wallet with real
+bridged/deposited assets instead); `deposit` then moves funds into the perp
+margin account and initializes the trading account. Skipping the deposit makes
+order placement fail with `user_variants not found`:
+
+```sh
+# Run the faucet curl printed by keygen, then:
+cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000
+```
+
 Run a bot (default: reads `~/.config/bullet/id.json`):
 
 ```sh

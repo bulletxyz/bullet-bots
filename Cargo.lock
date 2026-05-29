@@ -147,7 +147,6 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 dependencies = [
- "borsh",
  "serde",
 ]
 
@@ -605,27 +604,26 @@ checksum = "e67218f4455dc3cffdccd9ce3623157bd990102e466199969c5834543baa9121"
 
 [[package]]
 name = "bullet-exchange-interface"
-version = "0.1.1"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa1db1b9fd2925ce5af828c1dfee4b5c42cc11c7138fc82fa80bad1e709db615"
+checksum = "a3a232b6f2290ebb2b41fe04a9ed1063482e0d306ae36f74bf529e8d538dda90"
 dependencies = [
  "borsh",
  "bullet-bs58",
  "hex",
  "rust_decimal",
- "schemars",
+ "schemars 1.2.1",
  "serde",
- "serde_json",
  "sov-universal-wallet",
- "strum",
+ "strum 0.28.0",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "bullet-rust-sdk"
-version = "0.0.4"
+version = "0.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "107e09541abb6fdbcbca161ddc1c19847f321ccc29d6c9795f38268192721b36"
+checksum = "1947b23c306f0a0219aa7348a414269419449409b6b6c1cd294994e81e71e844"
 dependencies = [
  "base64 0.22.1",
  "bon",
@@ -646,10 +644,11 @@ dependencies = [
  "reqwest 0.13.2",
  "reqwest-websocket",
  "rust_decimal",
- "schemars",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
- "strum",
+ "sov-universal-wallet",
+ "strum 0.28.0",
  "syn 2.0.117",
  "thiserror 2.0.18",
  "tokio",
@@ -661,13 +660,13 @@ dependencies = [
 
 [[package]]
 name = "bullet-ws-interface"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6ffe6f5f65e0fcbd8b25d5b185d1d6a9c5ff1aac4f3c5f2df68f587afffca59"
+checksum = "11f8489f91ca8d12bfbd69082cdb381ab85754b4087784d393954777cb66c8ac"
 dependencies = [
  "serde",
  "serde_json",
- "strum",
+ "strum 0.28.0",
 ]
 
 [[package]]
@@ -987,15 +986,6 @@ checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 
 [[package]]
 name = "convert_case"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
-name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
@@ -1265,7 +1255,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case 0.10.0",
+ "convert_case",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -1658,7 +1648,7 @@ dependencies = [
  "rlp",
  "serde",
  "serde_json",
- "strum",
+ "strum 0.26.3",
  "syn 2.0.117",
  "tempfile",
  "thiserror 1.0.69",
@@ -3464,27 +3454,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3532,7 +3501,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "schemars",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "syn 2.0.117",
@@ -3551,7 +3520,7 @@ dependencies = [
  "proc-macro2",
  "progenitor-impl",
  "quote",
- "schemars",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "serde_tokenstream",
@@ -3785,6 +3754,26 @@ dependencies = [
  "getrandom 0.2.17",
  "libredox",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ref-cast"
+version = "1.0.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f354300ae66f76f1c85c5f84693f0ce81d747e2c3f21a45fef496d89c960bf7d"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7186006dcb21920990093f30e3dea63b7d6e977bf1256be20c3563a5db070da"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -4311,11 +4300,24 @@ checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
 dependencies = [
  "chrono",
  "dyn-clone",
- "rust_decimal",
- "schemars_derive",
+ "schemars_derive 0.8.22",
  "serde",
  "serde_json",
  "uuid 1.23.0",
+]
+
+[[package]]
+name = "schemars"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
+dependencies = [
+ "dyn-clone",
+ "ref-cast",
+ "rust_decimal",
+ "schemars_derive 1.2.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4323,6 +4325,18 @@ name = "schemars_derive"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d115b50f4aaeea07e79c1912f645c7513d81715d0420f8bc77a18c6260b307f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4696,9 +4710,9 @@ dependencies = [
 
 [[package]]
 name = "sov-universal-wallet"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d7dcc1d0c297e8c9db5a1ee04046a76d3a267ca1d212c3119e80f888c0509f"
+checksum = "e48bd6b958280067f285ef8db9f4e0421be052f36580217ceaab4690d7e60a4d"
 dependencies = [
  "alloy-primitives",
  "arrayvec",
@@ -4708,7 +4722,7 @@ dependencies = [
  "hex",
  "nmt-rs",
  "once_cell",
- "schemars",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "sha2",
@@ -4718,29 +4732,26 @@ dependencies = [
 
 [[package]]
 name = "sov-universal-wallet-macro-helpers"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e346647f42248fd10f28b5b37ec2d8dfca0a3b747acc31b70e60811f1e2ace7"
+checksum = "92a999d7c3d0e91f56d4469e3c4af1814dba75ef49bdba86e3fa034295566362"
 dependencies = [
  "bech32 0.11.1",
  "borsh",
  "bs58",
- "convert_case 0.6.0",
  "darling 0.21.3",
- "hex",
  "proc-macro2",
  "quote",
+ "serde_derive_internals",
  "syn 2.0.117",
- "syn_derive",
 ]
 
 [[package]]
 name = "sov-universal-wallet-macros"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40a805aa0ee077f7f655507c3c7d7839d9e54c9cb8b9c4816f9cba651be83483"
+checksum = "ab4fd1bd5b0046e4de30007fdc7687f4036f6d12ff9181add53d94b53e63dd39"
 dependencies = [
- "proc-macro2",
  "sov-universal-wallet-macro-helpers",
  "syn 2.0.117",
 ]
@@ -4797,7 +4808,16 @@ version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.26.4",
+]
+
+[[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros 0.28.0",
 ]
 
 [[package]]
@@ -4810,6 +4830,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
  "syn 2.0.117",
 ]
 
@@ -4859,18 +4891,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "syn_derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdb066a04799e45f5d582e8fc6ec8e6d6896040d00898eb4e6a835196815b219"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -5477,7 +5497,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regress",
- "schemars",
+ "schemars 0.8.22",
  "semver",
  "serde",
  "serde_json",
@@ -5494,7 +5514,7 @@ checksum = "fd04bb1207cd4e250941cc1641f4c4815f7eaa2145f45c09dd49cb0a3691710a"
 dependencies = [
  "proc-macro2",
  "quote",
- "schemars",
+ "schemars 0.8.22",
  "semver",
  "serde",
  "serde_json",
