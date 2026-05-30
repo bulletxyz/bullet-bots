@@ -151,8 +151,9 @@ pub struct CancelOrder {
 pub struct OrderResult {
     /// Venue-assigned order ID when placement is confirmed synchronously.
     /// `None` means the outcome is unknown — listen on the lifecycle stream.
-    /// Bullet does not return an oid synchronously (orders are submitted as
-    /// blockchain transactions); Hyperliquid does.
+    /// Both Bullet and Hyperliquid populate this on a successful place: Bullet
+    /// echoes the oid in the submit-tx `place_order` event even though the tx
+    /// is still `submitted`/`published` on-chain.
     pub order_id: Option<String>,
     pub client_id: Option<String>,
     pub success: bool,

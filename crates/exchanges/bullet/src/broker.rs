@@ -252,11 +252,21 @@ impl Broker for BulletBroker {
 
         match self.client.place_orders(market_id, sdk_orders, false, None).await {
             Ok(resp) => {
-                tracing::debug!(tx_id = %resp.id, "Orders placed");
+                // Bullet echoes each accepted order as a `place_order` event in
+                // the submit response, carrying the venue order_id alongside the
+                // client_order_id we sent. Map them back so we can surface the
+                // assigned order_id synchronously rather than making the strategy
+                // wait for the WS user-data stream.
+                let id_map: HashMap<String, String> = resp
+                    .events
+                    .iter()
+                    .filter_map(|ev| convert::place_order_ids(&ev.value))
+                    .collect();
+                tracing::debug!(tx_id = %resp.id, status = ?resp.status, oids = id_map.len(), "Orders placed");
                 Ok(orders
                     .iter()
                     .map(|o| OrderResult {
-                        order_id: None,
+                        order_id: o.client_id.as_deref().and_then(|c| id_map.get(c).cloned()),
                         client_id: o.client_id.clone(),
                         success: true,
                         error: None,
