@@ -8,8 +8,8 @@
 //! an internal reconnect loop (1s → 30s exponential backoff). Parse failures
 //! on a single frame are logged and skipped; the connection stays up. Disconnects
 //! trigger a reconnect. The feed itself is a thin wrapper around the receiver
-//! end of an mpsc channel, following the same `feed_impl!` pattern as the
-//! Hyperliquid adapter.
+//! end of a bounded mpsc channel via [`bb_core::harness::MpscFeed::bounded`] —
+//! the same primitive the Bullet and Hyperliquid adapters use.
 
 use std::str::FromStr;
 use std::time::{Duration, Instant};
