@@ -55,8 +55,9 @@ impl ActorContext {
     }
 
     /// The harness clock. Use `cx.clock().unix_ms()` for wall-clock time,
-    /// `cx.clock().now()` for monotonic durations. Defaults to [`SystemClock`];
-    /// override with [`HarnessBuilder::with_clock`] for deterministic tests.
+    /// `cx.clock().now()` for monotonic durations. Defaults to
+    /// [`SystemClock`](crate::clock::SystemClock); override with
+    /// [`HarnessBuilder::with_clock`] for deterministic tests.
     pub fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
     }

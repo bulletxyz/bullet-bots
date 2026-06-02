@@ -13,7 +13,7 @@
 //!   - `OrderUpdateData::PlaceOrder` / `Cancel` emit only `OrderLifecycle` — they carry no
 //!     execution, so there's no `Trade` to emit.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use bb_core::error::BotError;
@@ -35,6 +35,38 @@ use crate::broker::{BulletBroker, load_increments};
 /// or state transition permanently corrupts position tracking.
 const BOOK_CHANNEL_CAPACITY: usize = 4_096;
 const MARK_CHANNEL_CAPACITY: usize = 256;
+/// Cap on remembered fill ids for replay dedup. A reconnect replays only a
+/// small recent window, so this is far more than enough while bounding memory.
+const MAX_SEEN_TRADE_IDS: usize = 8_192;
+
+/// Bounded set of recently-seen ids with FIFO eviction. Used to drop fills
+/// replayed across a reconnect (which would otherwise double-count the
+/// position) without growing memory without bound.
+struct RecentIds {
+    set: HashSet<String>,
+    order: VecDeque<String>,
+    cap: usize,
+}
+
+impl RecentIds {
+    fn new(cap: usize) -> Self {
+        Self { set: HashSet::new(), order: VecDeque::new(), cap }
+    }
+
+    /// Record `id`; returns `true` if it's new, `false` if already seen.
+    fn insert(&mut self, id: &str) -> bool {
+        if !self.set.insert(id.to_string()) {
+            return false;
+        }
+        self.order.push_back(id.to_string());
+        if self.order.len() > self.cap
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.set.remove(&evicted);
+        }
+        true
+    }
+}
 use crate::config::BulletConfig;
 use crate::convert;
 
@@ -160,7 +192,7 @@ async fn muxer_loop(
     // subscriptions on reconnect, so a fill can arrive twice; emitting it twice
     // would double-count the position. A trade_id is unique per fill, so an
     // exact repeat is always a replay — safe to drop (a new fill has a new id).
-    let mut seen_trade_ids: HashSet<String> = HashSet::new();
+    let mut seen_fills = RecentIds::new(MAX_SEEN_TRADE_IDS);
     loop {
         let Some(ws_event) = ws.recv().await else {
             tracing::error!("Bullet: managed WS ended — flagging disconnected");
@@ -197,7 +229,7 @@ async fn muxer_loop(
                     // position isn't double-counted.
                     if let Some(trade) = convert::order_update_to_trade(update) {
                         let is_new = match &trade.trade_id {
-                            Some(id) => seen_trade_ids.insert(id.clone()),
+                            Some(id) => seen_fills.insert(id),
                             None => true, // no id to dedup on — emit
                         };
                         if is_new {
@@ -229,5 +261,29 @@ async fn muxer_loop(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RecentIds;
+
+    #[test]
+    fn recent_ids_dedups_exact_repeats() {
+        let mut seen = RecentIds::new(4);
+        assert!(seen.insert("a"), "first sighting is new");
+        assert!(!seen.insert("a"), "exact repeat is a duplicate");
+        assert!(seen.insert("b"), "different id is new");
+    }
+
+    #[test]
+    fn recent_ids_evicts_oldest_past_cap() {
+        let mut seen = RecentIds::new(2);
+        seen.insert("a");
+        seen.insert("b");
+        seen.insert("c"); // evicts "a"
+        assert!(seen.insert("a"), "evicted id is treated as new again");
+        // memory stays bounded at the cap
+        assert!(seen.set.len() <= 2);
     }
 }

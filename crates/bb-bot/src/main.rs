@@ -561,17 +561,19 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;
 
+    let private_key_hex = std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default();
     let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
-        let default = default_key_path();
-        default.exists().then_some(default)
+        // Only fall back to the default keystore when no hex key was supplied,
+        // matching `load_deposit_keypair`'s precedence (env key_file → env hex →
+        // default keystore) so flatten/observe/deposit pick the same account.
+        if private_key_hex.is_empty() {
+            let default = default_key_path();
+            default.exists().then_some(default)
+        } else {
+            None
+        }
     });
-    BulletConfig {
-        network,
-        key_file,
-        private_key_hex: SecretString::new(
-            std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default(),
-        ),
-    }
+    BulletConfig { network, key_file, private_key_hex: SecretString::new(private_key_hex) }
 }
 
 async fn deposit(

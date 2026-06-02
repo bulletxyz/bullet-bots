@@ -84,8 +84,11 @@ impl bb_core::harness::Actor for ObserverActor {
         _cx: &bb_core::harness::ActorContext,
     ) -> Result<(), bb_core::error::BotError> {
         use std::io::Write;
-        let _ = self.file.flush();
-        tracing::info!(rows = self.rows, "observer final — flushed CSV");
+        if let Err(e) = self.file.flush() {
+            tracing::warn!(error = %e, rows = self.rows, "observer: failed to flush CSV on shutdown");
+        } else {
+            tracing::info!(rows = self.rows, "observer final — flushed CSV");
+        }
         Ok(())
     }
 }

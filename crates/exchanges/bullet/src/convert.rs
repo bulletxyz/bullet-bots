@@ -145,7 +145,11 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             data.price.parse().unwrap_or_default(),
             data.quantity.parse().unwrap_or_default(),
             Decimal::ZERO,
-            match data.order_type.as_str() {
+            // Case-insensitive: the WS stream uses lowercase (`post_only`),
+            // unlike the REST `BinanceOrder` form. Market/IoC orders aren't
+            // distinguished on lifecycle (matching `get_open_orders`); the
+            // maker/taker fee signal lives on `is_maker` of the fill instead.
+            match data.order_type.to_ascii_uppercase().as_str() {
                 "POST_ONLY" => OrderType::PostOnly,
                 _ => OrderType::Limit,
             },
