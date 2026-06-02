@@ -1,0 +1,21 @@
+crates/exchanges/bullet/src/connection.rs
+  s_3aeee9d31a3a23::t_8d0cc7341fbabf 196-197,199-210
+  s_3aeee9d31a3a23::t_9805a522774385 16
+  s_3aeee9d31a3a23::t_6755fc4c8e2a7b 159-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "821fd15237dcc4f6b5e1175fd0477e05e2d09174",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
