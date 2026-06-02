@@ -440,6 +440,9 @@ impl EventHandler<BookUpdate> for FundingArbActor {
 
 #[async_trait]
 impl EventHandler<Tick> for FundingArbActor {
+    // Cohesive per-tick handler: health checks, per-venue position reconcile,
+    // then the funding-arb state machine. Kept inline for readability.
+    #[allow(clippy::too_many_lines)]
     async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
         // Connection-health checks first — if either broker has lost its WS,
         // we'd be running blind on stale state. Request shutdown so the

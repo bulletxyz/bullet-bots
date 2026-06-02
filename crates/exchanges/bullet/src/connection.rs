@@ -14,11 +14,11 @@
 //!     execution, so there's no `Trade` to emit.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
+use bb_core::health::ConnectionHealth;
 use bullet_rust_sdk::ws::models::ServerMessage;
 use bullet_rust_sdk::{
     Client, Keypair, ManagedWebsocket, Network, OrderbookDepth, Topic, UserActionDiscriminants,
@@ -26,7 +26,7 @@ use bullet_rust_sdk::{
 };
 use tokio::sync::mpsc;
 
-use crate::broker::{BulletBroker, ConnectionHealth, load_increments};
+use crate::broker::{BulletBroker, load_increments};
 
 /// `BookUpdate` / `MarkPriceUpdate` channels are bounded — the muxer uses
 /// `try_send` and drops-newest on overflow, since the next tick supersedes
@@ -158,7 +158,7 @@ async fn muxer_loop(
     loop {
         let Some(ws_event) = ws.recv().await else {
             tracing::error!("Bullet: managed WS ended — flagging disconnected");
-            health.disconnected.store(true, Ordering::Release);
+            health.flag_disconnected();
             break;
         };
         match ws_event {
@@ -202,11 +202,11 @@ async fn muxer_loop(
                 // Any state changes (fills, cancels) during the disconnect
                 // window are lost. Strategies that observe this flag should
                 // immediately query open orders to resync.
-                health.reconcile_pending.store(true, Ordering::Release);
+                health.flag_reconcile();
             }
             WsEvent::Disconnected(reason) => {
                 tracing::error!(%reason, "Bullet: permanently disconnected — flagging");
-                health.disconnected.store(true, Ordering::Release);
+                health.flag_disconnected();
                 break;
             }
         }

@@ -14,17 +14,17 @@
 //!     `ActiveAssetCtx` arrives).
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
+use bb_core::health::ConnectionHealth;
 use ethers::signers::{LocalWallet, Signer};
 use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
 use tokio::sync::mpsc;
 
-use crate::broker::{ClientIdMap, ConnectionHealth, HyperliquidBroker, new_client_id_map};
+use crate::broker::{ClientIdMap, HyperliquidBroker, new_client_id_map};
 use crate::config::HyperliquidConfig;
 use crate::convert;
 
@@ -79,7 +79,7 @@ pub async fn connect(
         .await
         .map_err(|e| BotError::exchange(e, true))?;
 
-    let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<Message>();
+    let (ws_tx, ws_rx) = mpsc::unbounded_channel::<Message>();
     let coin = convert::to_hl_coin(symbol);
 
     for (label, sub) in [
@@ -169,13 +169,13 @@ async fn muxer_loop(
                     quiet_secs = HL_WS_QUIET_THRESHOLD.as_secs(),
                     "HL WS quiet — flagging reconcile (transparent reconnect proxy)"
                 );
-                health.reconcile_pending.store(true, Ordering::Release);
+                health.flag_reconcile();
                 last_msg_at = Instant::now();
                 continue;
             }
             Ok(None) => {
                 tracing::error!("Hyperliquid: WS muxer ended — flagging disconnected");
-                health.disconnected.store(true, Ordering::Release);
+                health.flag_disconnected();
                 break;
             }
             Ok(Some(msg)) => {
@@ -188,7 +188,7 @@ async fn muxer_loop(
                         gap_secs = gap.as_secs(),
                         "HL WS message after gap — flagging reconcile"
                     );
-                    health.reconcile_pending.store(true, Ordering::Release);
+                    health.flag_reconcile();
                 }
                 last_msg_at = Instant::now();
                 msg
