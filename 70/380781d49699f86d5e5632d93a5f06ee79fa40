@@ -1,0 +1,23 @@
+crates/bb-bot/src/main.rs
+  s_3aeee9d31a3a23::t_559c6dc6e05ad0 152-157,160-162
+AGENTS.md
+  s_3aeee9d31a3a23::t_e0ec94c5d51285 307-310,312-314
+crates/exchanges/bullet/src/config.rs
+  s_3aeee9d31a3a23::t_e4eb6a2cf326a5 8-10,17,19-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "70380781d49699f86d5e5632d93a5f06ee79fa40",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
