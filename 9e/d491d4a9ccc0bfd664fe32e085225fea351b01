@@ -1,0 +1,13 @@
+crates/strategies/funding-arb/src/strategy.rs
+  ai_agent 23,470-475,484-487,489-499
+crates/strategies/grid/src/strategy.rs
+  ai_agent 485-486,488-491,512-518
+crates/strategies/reference-arb/src/strategy.rs
+  ai_agent 120,122-125,134-147,155,689-695,714-716,718
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9ed491d4a9ccc0bfd664fe32e085225fea351b01",
+  "prompts": {}
+}
