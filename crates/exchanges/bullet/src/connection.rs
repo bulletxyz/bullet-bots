@@ -13,6 +13,7 @@
 //!   - `OrderUpdateData::PlaceOrder` / `Cancel` emit only `OrderLifecycle` — they carry no
 //!     execution, so there's no `Trade` to emit.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use bb_core::error::BotError;
@@ -155,6 +156,11 @@ async fn muxer_loop(
     // arriving with a lower value than the high-water mark means out-of-order
     // delivery (or a replay across a reconnect), worth surfacing.
     let mut last_order_event_time: u64 = 0;
+    // Fills seen so far, keyed by sequencer trade_id. `ManagedWebsocket` replays
+    // subscriptions on reconnect, so a fill can arrive twice; emitting it twice
+    // would double-count the position. A trade_id is unique per fill, so an
+    // exact repeat is always a replay — safe to drop (a new fill has a new id).
+    let mut seen_trade_ids: HashSet<String> = HashSet::new();
     loop {
         let Some(ws_event) = ws.recv().await else {
             tracing::error!("Bullet: managed WS ended — flagging disconnected");
@@ -187,8 +193,21 @@ async fn muxer_loop(
                         last_order_event_time = update.event_time;
                     }
                     // Emit Trade and/or OrderLifecycle depending on variant.
+                    // Drop a fill we've already emitted (reconnect replay) so the
+                    // position isn't double-counted.
                     if let Some(trade) = convert::order_update_to_trade(update) {
-                        let _ = trade_tx.send(trade);
+                        let is_new = match &trade.trade_id {
+                            Some(id) => seen_trade_ids.insert(id.clone()),
+                            None => true, // no id to dedup on — emit
+                        };
+                        if is_new {
+                            let _ = trade_tx.send(trade);
+                        } else {
+                            tracing::debug!(
+                                trade_id = ?trade.trade_id,
+                                "Bullet: dropping duplicate fill (reconnect replay)"
+                            );
+                        }
                     }
                     let _ = life_tx.send(convert::order_update_to_lifecycle(update));
                 }
