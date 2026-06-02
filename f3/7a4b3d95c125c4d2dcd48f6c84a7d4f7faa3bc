@@ -1,0 +1,20 @@
+crates/exchanges/bullet/src/broker.rs
+  s_3aeee9d31a3a23::t_9f827e1dd9f999 260
+  s_3aeee9d31a3a23::t_dda1e74c6f35f3 255-259,265-266,268-269,273-279,281-282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f37a4b3d95c125c4d2dcd48f6c84a7d4f7faa3bc",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
