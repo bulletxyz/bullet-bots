@@ -1,0 +1,26 @@
+crates/exchanges/bullet/src/config.rs
+  s_3aeee9d31a3a23::t_19c7280271e0d7 10-13
+  s_3aeee9d31a3a23::t_a93ae57a18a575 8,14-18
+crates/exchanges/bullet/src/connection.rs
+  s_3aeee9d31a3a23::t_9c026325d9e706 97-98,104
+crates/exchanges/bullet/src/convert.rs
+  s_3aeee9d31a3a23::t_e4b40eee17bb4e 117-164
+  s_3aeee9d31a3a23::t_40f209069f9bdd 183-184,192
+  s_3aeee9d31a3a23::t_e5a5e3c4647acf 98,103-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3c3729dc7ce4456338824e3fed3f42fd8b9a58d9",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
