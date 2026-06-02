@@ -252,16 +252,34 @@ impl Broker for BulletBroker {
 
         match self.client.place_orders(market_id, sdk_orders, false, None).await {
             Ok(resp) => {
-                tracing::debug!(tx_id = %resp.id, "Orders placed");
-                Ok(orders
+                // Bullet echoes each accepted order as a `place_order` event
+                // carrying its venue order_id + the client_order_id we sent, so we
+                // surface the order_id now instead of awaiting the WS stream.
+                // Keyed by client_order_id (not zipped positionally) so it survives
+                // partial acceptance, interleaved events, and reordering.
+                let oids: HashMap<u64, String> = resp
+                    .events
                     .iter()
-                    .map(|o| OrderResult {
-                        order_id: None,
-                        client_id: o.client_id.clone(),
-                        success: true,
-                        error: None,
+                    .filter_map(|ev| convert::place_order_ids(&ev.value))
+                    .collect();
+                tracing::debug!(tx_id = %resp.id, status = ?resp.status, oids = oids.len(), "Orders placed");
+                let results = orders
+                    .iter()
+                    .map(|o| {
+                        let order_id = o
+                            .client_id
+                            .as_deref()
+                            .and_then(|c| c.parse::<u64>().ok())
+                            .and_then(|cid| oids.get(&cid).cloned());
+                        OrderResult {
+                            order_id,
+                            client_id: o.client_id.clone(),
+                            success: true,
+                            error: None,
+                        }
                     })
-                    .collect())
+                    .collect();
+                Ok(results)
             }
             Err(e) => {
                 // Broker is intentionally a thin pass-through: an HTTP error

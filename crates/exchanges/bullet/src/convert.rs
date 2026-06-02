@@ -181,3 +181,62 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
         },
     }
 }
+
+/// Extract the `(client_order_id, order_id)` pair from a single submit-tx
+/// `LedgerEvent` value. Bullet echoes each accepted order as a `place_order`
+/// event carrying both the venue-assigned `order_id` and the
+/// `client_order_id` we sent, so the broker can surface the oid synchronously
+/// instead of waiting for the WS user-data stream. Returns `None` for any
+/// other event type (or a malformed `place_order` payload).
+pub fn place_order_ids(
+    value: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(u64, String)> {
+    let po = value.get("place_order")?.as_object()?;
+    let order_id = po.get("order_id")?.as_u64()?;
+    let client_order_id = po.get("client_order_id")?.as_u64()?;
+    Some((client_order_id, order_id.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::place_order_ids;
+
+    #[test]
+    fn extracts_client_and_order_id_from_place_order_event() {
+        let value = serde_json::json!({
+            "place_order": {
+                "user_address": "GM8pdc",
+                "order_id": 223_265_793_u64,
+                "client_order_id": 17_801_200_030_000_u64,
+                "side": "bid"
+            }
+        });
+        let (client_id, order_id) = place_order_ids(value.as_object().unwrap()).unwrap();
+        assert_eq!(client_id, 17_801_200_030_000);
+        assert_eq!(order_id, "223265793");
+    }
+
+    #[test]
+    fn client_id_key_is_numeric_so_non_canonical_strings_still_match() {
+        // The broker looks up by the numeric client_order_id, so a strategy that
+        // sent a non-canonical string like "00123" (which the send path parses to
+        // 123) still resolves its order_id.
+        let value = serde_json::json!({
+            "place_order": { "order_id": 9_u64, "client_order_id": 123_u64 }
+        });
+        let (client_id, _) = place_order_ids(value.as_object().unwrap()).unwrap();
+        assert_eq!(client_id, "00123".parse::<u64>().unwrap());
+    }
+
+    #[test]
+    fn returns_none_for_non_place_order_event() {
+        let value = serde_json::json!({ "fill": { "order_id": 1_u64 } });
+        assert!(place_order_ids(value.as_object().unwrap()).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_ids_missing() {
+        let value = serde_json::json!({ "place_order": { "side": "bid" } });
+        assert!(place_order_ids(value.as_object().unwrap()).is_none());
+    }
+}
