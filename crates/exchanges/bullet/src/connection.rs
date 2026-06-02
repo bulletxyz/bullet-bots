@@ -94,18 +94,18 @@ pub async fn connect(
 
     // Set up WS + subscriptions.
     let ws = client.connect_ws_managed().call().await.map_err(|e| BotError::exchange(e, true))?;
+    // Bullet user-order stream: address-prefixed topic (no listenKey flow).
+    let user_topic = Topic::user_orders(address.clone()).to_string();
     ws.subscribe(
         [
             Topic::depth(symbol, OrderbookDepth::D20),
             Topic::book_ticker(symbol),
             Topic::mark_price(symbol),
+            Topic::user_orders(address.clone()),
         ],
         None,
     )
     .map_err(|e| BotError::exchange(e, false))?;
-    // Bullet user-order stream: address-prefixed raw topic (no listenKey flow).
-    let user_topic = format!("{address}@user.orders");
-    ws.subscribe_raw([user_topic.clone()], None).map_err(|e| BotError::exchange(e, false))?;
 
     tracing::info!(
         symbol,

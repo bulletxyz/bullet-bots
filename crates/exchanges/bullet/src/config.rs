@@ -5,17 +5,17 @@ use serde::Deserialize;
 
 /// Configuration for the Bullet exchange adapter.
 ///
-/// Key material can be supplied two ways, in this preference order:
+/// Key material is resolved in this precedence order (first match wins):
 ///
-/// 1. **`key_file`** — path to a Solana-compatible JSON keystore (as produced by `bb-bot keygen` or
-///    `solana-keygen`). Preferred: the key lives on disk with whatever permissions the filesystem
-///    enforces, never hits the shell history, and isn't trivially exfiltrated via a process
-///    environment dump.
-/// 2. **`private_key_hex`** — Ed25519 secret as a hex string. Wrapped in [`SecretString`] so it's
-///    redacted in `Debug` output and zeroed on drop. Still supported for CI / ephemeral contexts;
-///    the env var `BB_BULLET_PRIVATE_KEY_HEX` populates this field.
-///
-/// If both are set, `key_file` wins.
+/// 1. **`key_file`** (config) — path to a Solana-compatible JSON keystore (as produced by `bb-bot
+///    keygen` or `solana-keygen`). Preferred: the key lives on disk with whatever permissions the
+///    filesystem enforces, never hits the shell history, and isn't trivially exfiltrated via a
+///    process environment dump.
+/// 2. **`BB_BULLET_KEY_FILE`** (env) — same keystore-file path, supplied via the environment.
+/// 3. **`BB_BULLET_PRIVATE_KEY_HEX`** (env) — Ed25519 secret as a hex string, for CI / ephemeral
+///    contexts.
+/// 4. **`private_key_hex`** (config) — Ed25519 secret as a hex string. Wrapped in [`SecretString`]
+///    so it's redacted in `Debug` output and zeroed on drop.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BulletConfig {
     /// Network to connect to: "mainnet" or "testnet".
