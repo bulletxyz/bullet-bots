@@ -14,17 +14,17 @@
 //!     `ActiveAssetCtx` arrives).
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
+use bb_core::health::ConnectionHealth;
 use ethers::signers::{LocalWallet, Signer};
 use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
 use tokio::sync::mpsc;
 
-use crate::broker::{ConnectionHealth, HyperliquidBroker, new_client_id_map};
+use crate::broker::{ClientIdMap, HyperliquidBroker, new_client_id_map};
 use crate::config::HyperliquidConfig;
 use crate::convert;
 
@@ -48,7 +48,6 @@ pub struct HyperliquidFeeds {
 
 /// Connect to Hyperliquid and return the REST broker plus typed feeds for
 /// the harness to wire up. `symbol` is in bb format (e.g. `"BTC-USD"`).
-#[allow(clippy::too_many_lines)]
 pub async fn connect(
     config: &HyperliquidConfig,
     symbol: &str,
@@ -60,7 +59,12 @@ pub async fn connect(
     let address = wallet.address();
     let base_url = match config.network.as_str() {
         "mainnet" => BaseUrl::Mainnet,
-        _ => BaseUrl::Testnet,
+        "testnet" => BaseUrl::Testnet,
+        other => {
+            return Err(BotError::config(format!(
+                "Unknown Hyperliquid network '{other}' — use 'mainnet' or 'testnet'"
+            )));
+        }
     };
 
     let exchange_client = ExchangeClient::new(None, wallet.clone(), Some(base_url), None, None)
@@ -75,7 +79,7 @@ pub async fn connect(
         .await
         .map_err(|e| BotError::exchange(e, true))?;
 
-    let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<Message>();
+    let (ws_tx, ws_rx) = mpsc::unbounded_channel::<Message>();
     let coin = convert::to_hl_coin(symbol);
 
     for (label, sub) in [
@@ -106,102 +110,17 @@ pub async fn connect(
     let muxer_client_ids = Arc::clone(&client_ids);
 
     let target_coin = coin.clone();
-    tokio::spawn(async move {
-        let _ws_info = ws_info; // keep WS alive
-        // Track the highest OrderUpdate.status_timestamp we've seen. HL stamps
-        // each frame with millisecond timestamps; a frame arriving below the
-        // high-water mark indicates out-of-order delivery or a replay across
-        // a reconnect — worth surfacing.
-        let mut last_order_timestamp: u64 = 0;
-        let mut last_msg_at = Instant::now();
-        loop {
-            let recv = tokio::time::timeout(HL_WS_QUIET_THRESHOLD, ws_rx.recv()).await;
-            let msg = match recv {
-                Err(_elapsed) => {
-                    // No traffic for HL_WS_QUIET_THRESHOLD — proxy for a
-                    // transparent reconnect. Flag for reconciliation; do
-                    // not break.
-                    tracing::warn!(
-                        quiet_secs = HL_WS_QUIET_THRESHOLD.as_secs(),
-                        "HL WS quiet — flagging reconcile (transparent reconnect proxy)"
-                    );
-                    muxer_health.reconcile_pending.store(true, Ordering::Release);
-                    last_msg_at = Instant::now();
-                    continue;
-                }
-                Ok(None) => {
-                    tracing::error!("Hyperliquid: WS muxer ended — flagging disconnected");
-                    muxer_health.disconnected.store(true, Ordering::Release);
-                    break;
-                }
-                Ok(Some(msg)) => {
-                    // Catch silent reconnects: if the SDK's transparent
-                    // reconnect was fast enough that we got a message
-                    // before our timeout fired but after a real gap.
-                    let gap = last_msg_at.elapsed();
-                    if gap > HL_WS_QUIET_THRESHOLD {
-                        tracing::warn!(
-                            gap_secs = gap.as_secs(),
-                            "HL WS message after gap — flagging reconcile"
-                        );
-                        muxer_health.reconcile_pending.store(true, Ordering::Release);
-                    }
-                    last_msg_at = Instant::now();
-                    msg
-                }
-            };
-            match msg {
-                Message::L2Book(b) if b.data.coin == target_coin => {
-                    // drop-newest on overflow: next snapshot is incoming
-                    let _ = book_tx.try_send(convert::l2_book_to_event(&b.data));
-                }
-                Message::OrderUpdates(u) => {
-                    for update in u.data.iter().filter(|u| u.order.coin == target_coin) {
-                        if update.status_timestamp < last_order_timestamp {
-                            tracing::warn!(
-                                previous = last_order_timestamp,
-                                current = update.status_timestamp,
-                                delta_ms = last_order_timestamp - update.status_timestamp,
-                                oid = update.order.oid,
-                                "HL OrderUpdate timestamp regressed — out-of-order or replay"
-                            );
-                        } else {
-                            last_order_timestamp = update.status_timestamp;
-                        }
-                        let _ = life_tx
-                            .send(convert::order_update_to_lifecycle(update, &muxer_client_ids));
-                    }
-                }
-                Message::UserFills(f) => {
-                    for fill in f.data.fills.iter().filter(|f| f.coin == target_coin) {
-                        if let Some(trade) = convert::fill_to_trade(fill, &muxer_client_ids) {
-                            let _ = trade_tx.send(trade);
-                        }
-                    }
-                }
-                Message::AllMids(m) => {
-                    if let Some(mid_str) = m.data.mids.get(&target_coin)
-                        && let Some(mark_price) =
-                            bb_core::helpers::parse_decimal_or_warn(mid_str, "AllMids.mid")
-                    {
-                        let _ = mark_tx.try_send(MarkPriceUpdate {
-                            exchange: "hyperliquid".into(),
-                            symbol: convert::to_bb_symbol(&target_coin),
-                            mark_price,
-                            funding_rate: None, // AllMids carries no funding rate
-                        });
-                    }
-                }
-                Message::ActiveAssetCtx(ctx) if ctx.data.coin == target_coin => {
-                    if let Some(event) = convert::active_asset_ctx_to_mark(&ctx.data) {
-                        let _ = mark_tx.try_send(event);
-                    }
-                }
-                _ => {}
-            }
-        }
-        tracing::warn!("Hyperliquid: WS muxer ended");
-    });
+    tokio::spawn(muxer_loop(
+        ws_info,
+        ws_rx,
+        trade_tx,
+        book_tx,
+        life_tx,
+        mark_tx,
+        muxer_health,
+        muxer_client_ids,
+        target_coin,
+    ));
 
     let broker = HyperliquidBroker::new(exchange_client, info, address, health, client_ids);
     let feeds = HyperliquidFeeds {
@@ -211,4 +130,118 @@ pub async fn connect(
         mark_price: MpscFeed::bounded(mark_rx),
     };
     Ok((broker, feeds))
+}
+
+/// Muxer task — reads the WS message stream, classifies each `Message`, and
+/// forwards converted events into the typed channels. Holds `ws_info` so the
+/// WS connection stays alive for the lifetime of the task.
+///
+/// The HL SDK reconnects transparently with no userspace `Reconnecting` event,
+/// so reconnects are inferred from message-stream gaps (`HL_WS_QUIET_THRESHOLD`)
+/// and a reconcile signal is flagged for strategies to resync against REST.
+#[allow(clippy::too_many_arguments)]
+async fn muxer_loop(
+    ws_info: InfoClient,
+    mut ws_rx: mpsc::UnboundedReceiver<Message>,
+    trade_tx: mpsc::UnboundedSender<Trade>,
+    book_tx: mpsc::Sender<BookUpdate>,
+    life_tx: mpsc::UnboundedSender<OrderLifecycle>,
+    mark_tx: mpsc::Sender<MarkPriceUpdate>,
+    health: Arc<ConnectionHealth>,
+    client_ids: ClientIdMap,
+    target_coin: String,
+) {
+    let _ws_info = ws_info; // keep WS alive
+    // Track the highest OrderUpdate.status_timestamp we've seen. HL stamps
+    // each frame with millisecond timestamps; a frame arriving below the
+    // high-water mark indicates out-of-order delivery or a replay across
+    // a reconnect — worth surfacing.
+    let mut last_order_timestamp: u64 = 0;
+    let mut last_msg_at = Instant::now();
+    loop {
+        let recv = tokio::time::timeout(HL_WS_QUIET_THRESHOLD, ws_rx.recv()).await;
+        let msg = match recv {
+            Err(_elapsed) => {
+                // No traffic for HL_WS_QUIET_THRESHOLD — proxy for a
+                // transparent reconnect. Flag for reconciliation; do
+                // not break.
+                tracing::warn!(
+                    quiet_secs = HL_WS_QUIET_THRESHOLD.as_secs(),
+                    "HL WS quiet — flagging reconcile (transparent reconnect proxy)"
+                );
+                health.flag_reconcile();
+                last_msg_at = Instant::now();
+                continue;
+            }
+            Ok(None) => {
+                tracing::error!("Hyperliquid: WS muxer ended — flagging disconnected");
+                health.flag_disconnected();
+                break;
+            }
+            Ok(Some(msg)) => {
+                // Catch silent reconnects: if the SDK's transparent
+                // reconnect was fast enough that we got a message
+                // before our timeout fired but after a real gap.
+                let gap = last_msg_at.elapsed();
+                if gap > HL_WS_QUIET_THRESHOLD {
+                    tracing::warn!(
+                        gap_secs = gap.as_secs(),
+                        "HL WS message after gap — flagging reconcile"
+                    );
+                    health.flag_reconcile();
+                }
+                last_msg_at = Instant::now();
+                msg
+            }
+        };
+        match msg {
+            Message::L2Book(b) if b.data.coin == target_coin => {
+                // drop-newest on overflow: next snapshot is incoming
+                let _ = book_tx.try_send(convert::l2_book_to_event(&b.data));
+            }
+            Message::OrderUpdates(u) => {
+                for update in u.data.iter().filter(|u| u.order.coin == target_coin) {
+                    if update.status_timestamp < last_order_timestamp {
+                        tracing::warn!(
+                            previous = last_order_timestamp,
+                            current = update.status_timestamp,
+                            delta_ms = last_order_timestamp - update.status_timestamp,
+                            oid = update.order.oid,
+                            "HL OrderUpdate timestamp regressed — out-of-order or replay"
+                        );
+                    } else {
+                        last_order_timestamp = update.status_timestamp;
+                    }
+                    let _ = life_tx.send(convert::order_update_to_lifecycle(update, &client_ids));
+                }
+            }
+            Message::UserFills(f) => {
+                for fill in f.data.fills.iter().filter(|f| f.coin == target_coin) {
+                    if let Some(trade) = convert::fill_to_trade(fill, &client_ids) {
+                        let _ = trade_tx.send(trade);
+                    }
+                }
+            }
+            Message::AllMids(m) => {
+                if let Some(mid_str) = m.data.mids.get(&target_coin)
+                    && let Some(mark_price) =
+                        bb_core::helpers::parse_decimal_or_warn(mid_str, "AllMids.mid")
+                {
+                    let _ = mark_tx.try_send(MarkPriceUpdate {
+                        exchange: "hyperliquid".into(),
+                        symbol: convert::to_bb_symbol(&target_coin),
+                        mark_price,
+                        funding_rate: None, // AllMids carries no funding rate
+                    });
+                }
+            }
+            Message::ActiveAssetCtx(ctx) if ctx.data.coin == target_coin => {
+                if let Some(event) = convert::active_asset_ctx_to_mark(&ctx.data) {
+                    let _ = mark_tx.try_send(event);
+                }
+            }
+            _ => {}
+        }
+    }
+    tracing::warn!("Hyperliquid: WS muxer ended");
 }

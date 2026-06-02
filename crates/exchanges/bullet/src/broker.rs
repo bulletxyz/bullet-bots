@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use bb_core::broker::Broker;
 use bb_core::error::BotError;
+use bb_core::health::ConnectionHealth;
 use bb_core::types::{
     AmendOrder, Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult,
     OrderStatus, OrderType, Position, Side,
@@ -27,16 +27,6 @@ use crate::convert;
 pub(crate) struct Increments {
     pub tick_size: Decimal,
     pub step_size: Decimal,
-}
-
-/// Cross-thread health state shared with the WS muxer task. The muxer flips
-/// `reconcile_pending` on every reconnect (so the strategy can resync immediately
-/// rather than wait for the next periodic sweep) and `disconnected` once the
-/// SDK has exhausted its retry budget (so the strategy can request shutdown).
-#[derive(Debug, Default)]
-pub(crate) struct ConnectionHealth {
-    pub reconcile_pending: AtomicBool,
-    pub disconnected: AtomicBool,
 }
 
 pub struct BulletBroker {
@@ -114,11 +104,11 @@ impl Broker for BulletBroker {
     }
 
     fn take_reconcile_signal(&self) -> bool {
-        self.health.reconcile_pending.swap(false, Ordering::AcqRel)
+        self.health.take_reconcile_signal()
     }
 
     fn is_disconnected(&self) -> bool {
-        self.health.disconnected.load(Ordering::Acquire)
+        self.health.is_disconnected()
     }
 
     async fn get_orderbook(&self, symbol: &str, depth: usize) -> Result<OrderBook, BotError> {

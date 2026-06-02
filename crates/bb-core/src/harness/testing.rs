@@ -221,11 +221,6 @@ impl MockBroker {
         self.history.lock().await.iter().filter(|c| c.method == "place_orders").count()
     }
 
-    /// Number of `cancel_orders` calls recorded.
-    pub async fn cancel_count(&self) -> usize {
-        self.history.lock().await.iter().filter(|c| c.method == "cancel_orders").count()
-    }
-
     /// Orders from the most recent `place_orders` call, or empty if none.
     pub async fn last_placed_orders(&self) -> Vec<NewOrder> {
         self.history
@@ -248,12 +243,6 @@ impl MockBroker {
             .find(|c| c.method == "cancel_orders")
             .map(|c| c.cancels.clone())
             .unwrap_or_default()
-    }
-
-    /// Panic with a message if the number of `place_orders` calls ≠ `n`.
-    pub async fn assert_placed_count(&self, n: usize) {
-        let got = self.placed_count().await;
-        assert_eq!(got, n, "expected {n} place_orders calls, got {got}");
     }
 
     async fn record(&self, call: RecordedCall) {

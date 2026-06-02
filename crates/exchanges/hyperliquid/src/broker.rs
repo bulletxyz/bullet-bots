@@ -12,12 +12,12 @@
 //!     the old "dropped cancels" gotcha.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bb_core::broker::Broker;
 use bb_core::error::BotError;
+use bb_core::health::ConnectionHealth;
 use bb_core::types::{
     AmendOrder, Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult,
     OrderStatus, OrderType, Position, Side,
@@ -59,16 +59,6 @@ pub(crate) fn original_client_id(map: &ClientIdMap, cloid: &str) -> String {
     guard.get(cloid).cloned().unwrap_or_else(|| cloid.to_string())
 }
 
-/// Cross-thread health state shared with the WS muxer task. Mirrors the
-/// Bullet adapter — `reconcile_pending` flips on every WS reconnect (so
-/// strategies can resync immediately rather than wait for the periodic
-/// sweep), and `disconnected` flips once the SDK's reconnect loop exits.
-#[derive(Debug, Default)]
-pub(crate) struct ConnectionHealth {
-    pub reconcile_pending: AtomicBool,
-    pub disconnected: AtomicBool,
-}
-
 pub struct HyperliquidBroker {
     exchange: ExchangeClient,
     info: InfoClient,
@@ -96,11 +86,11 @@ impl Broker for HyperliquidBroker {
     }
 
     fn take_reconcile_signal(&self) -> bool {
-        self.health.reconcile_pending.swap(false, Ordering::AcqRel)
+        self.health.take_reconcile_signal()
     }
 
     fn is_disconnected(&self) -> bool {
-        self.health.disconnected.load(Ordering::Acquire)
+        self.health.is_disconnected()
     }
 
     async fn get_orderbook(&self, symbol: &str, _depth: usize) -> Result<OrderBook, BotError> {

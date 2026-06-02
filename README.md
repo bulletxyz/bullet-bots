@@ -55,9 +55,10 @@ Recommended first path:
    on-chain wallet, not your trading account. The faucet is **testnet only** —
    on mainnet you fund the wallet with real bridged/deposited assets instead.
 3. `deposit` — move funds from the on-chain wallet into the perp margin account
-   (e.g. `deposit --asset USDC --amount 5000`). This also initializes the
-   trading account; without it, order placement fails with `user_variants not
-   found`.
+   (e.g. `deposit --network testnet --asset USDC --amount 5000`). The asset must
+   match a name in Bullet's exchangeInfo (e.g. `USDC`) and the amount is in that
+   asset's units. This also initializes the trading account; without it, order
+   placement fails with `user_variants not found`.
 4. `observe` — collect Bullet/Binance spread data without trading.
 5. `validate` — preflight the config.
 6. `run` — start tiny, watch logs plus `GET /status`.
@@ -102,9 +103,51 @@ While running, the bot exposes an HTTP status endpoint on `engine.status_port`
 - `GET /health` — liveness check
 - `GET /status` — uptime plus every actor's JSON snapshot keyed by name
 
+```sh
+curl localhost:3030/status
+```
+
+```jsonc
+{
+  "uptime_secs": 142,
+  "actors": {
+    "simple-mm": {
+      "symbol": "BTC-USD",
+      "dry_run": false,
+      "net_position": "0.002",   // signed inventory (+ long / - short)
+      "realized_pnl": "1.37",    // closed-trade PnL in quote units
+      "total_fills": 5,          // count of Trade events applied
+      "mid": "68250.5",
+      "bid": { "side": "Buy",  "price": "68181.2", "client_id": "12", "order_id": "9001" },
+      "ask": { "side": "Sell", "price": "68319.8", "client_id": "13", "order_id": "9002" }
+    }
+  }
+}
+```
+
+The actor snapshot is whatever that strategy's `Actor::status()` returns, so
+fields vary per strategy (the example above is `simple-mm`).
+
 To expose on a non-loopback address (e.g. for remote monitoring), set
 `engine.status_bind = "0.0.0.0:3030"` — note that the endpoint exposes
 positions and PnL, so firewall accordingly.
+
+## Troubleshooting
+
+Common first-run errors and their fixes:
+
+- **`user_variants not found`** on order placement — you skipped the `deposit`
+  step, so the trading account was never initialized. Run:
+  ```sh
+  cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000
+  ```
+- **reference-arb "refuses to run with a non-flat position"** — a prior session
+  left an open position. Flatten it first:
+  ```sh
+  cargo run --bin bb-bot -- flatten --network testnet --symbol BTC-USD
+  ```
+- **Status port already in use** — two bots can't share `engine.status_port`.
+  Give each running bot a unique port (the example configs use 3030–3034).
 
 ## Intentionally out of scope
 

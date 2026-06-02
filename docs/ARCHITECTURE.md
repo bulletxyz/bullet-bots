@@ -195,7 +195,7 @@ wire formats. `connection.rs` just routes; `broker.rs` just calls REST.
 graph TD
     SF["ScriptedFeed&lt;E&gt;\nsends preset events"] -->|events| Bus["EventBus"]
     Bus --> A["Actor"]
-    A -->|"cx.brokers().require('bullet')"| MB["MockBroker\nrecords calls\nreturns queued responses"]
+    A -->|"cx.broker('bullet')"| MB["MockBroker\nrecords calls\nreturns queued responses"]
     A --> AS["assert:\nplaced_count()\nlast_placed_orders()\n..."]
 ```
 

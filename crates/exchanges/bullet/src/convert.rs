@@ -95,12 +95,13 @@ pub fn order_update_to_trade(msg: &OrderUpdateMessage) -> Option<Trade> {
         exchange: EXCHANGE.into(),
         symbol: data.common.symbol.clone(),
         order_id: data.common.order_id.to_string(),
-        trade_id: None, // Bullet SDK does not expose a per-fill trade ID
+        trade_id: Some(data.trade_id.to_string()),
         client_id: data.common.client_order_id.as_ref().map(ToString::to_string),
         side,
         price,
         quantity,
-        timestamp: None, // Bullet SDK does not expose a per-fill timestamp
+        // Bullet stamps user-data frames in microseconds; Trade.timestamp is Unix ms.
+        timestamp: Some(data.common.transaction_time / 1000),
     })
 }
 
@@ -113,39 +114,58 @@ pub fn order_update_to_trade(msg: &OrderUpdateMessage) -> Option<Trade> {
 /// We default to `Side::Buy` for Cancel; strategies should not rely on the
 /// side field of a Cancel lifecycle event.
 pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
-    let (symbol, order_id, client_id, status_str, side_str, price, quantity, filled_quantity) =
-        match &msg.order {
-            OrderUpdateData::TradeFill(data) => (
-                data.common.symbol.clone(),
-                data.common.order_id.to_string(),
-                data.common.client_order_id.as_ref().map(ToString::to_string),
-                data.common.status.clone(),
-                data.side.clone(),
-                data.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(Decimal::ZERO),
-                data.quantity.as_deref().and_then(|s| s.parse().ok()).unwrap_or(Decimal::ZERO),
-                data.last_filled_qty.parse().unwrap_or_default(),
-            ),
-            OrderUpdateData::PlaceOrder(data) => (
-                data.common.symbol.clone(),
-                data.common.order_id.to_string(),
-                data.common.client_order_id.as_ref().map(ToString::to_string),
-                data.common.status.clone(),
-                data.side.clone(),
-                data.price.parse().unwrap_or_default(),
-                data.quantity.parse().unwrap_or_default(),
-                Decimal::ZERO,
-            ),
-            OrderUpdateData::Cancel(data) => (
-                data.common.symbol.clone(),
-                data.common.order_id.to_string(),
-                data.common.client_order_id.as_ref().map(ToString::to_string),
-                data.common.status.clone(),
-                String::new(), // SDK Cancel does not surface the original side
-                Decimal::ZERO,
-                Decimal::ZERO,
-                Decimal::ZERO,
-            ),
-        };
+    let (
+        symbol,
+        order_id,
+        client_id,
+        status_str,
+        side_str,
+        price,
+        quantity,
+        filled_quantity,
+        order_type,
+    ) = match &msg.order {
+        OrderUpdateData::TradeFill(data) => (
+            data.common.symbol.clone(),
+            data.common.order_id.to_string(),
+            data.common.client_order_id.as_ref().map(ToString::to_string),
+            data.common.status.clone(),
+            data.side.clone(),
+            data.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(Decimal::ZERO),
+            data.quantity.as_deref().and_then(|s| s.parse().ok()).unwrap_or(Decimal::ZERO),
+            data.last_filled_qty.parse().unwrap_or_default(),
+            OrderType::Limit, // TradeFill carries no order_type field
+        ),
+        OrderUpdateData::PlaceOrder(data) => (
+            data.common.symbol.clone(),
+            data.common.order_id.to_string(),
+            data.common.client_order_id.as_ref().map(ToString::to_string),
+            data.common.status.clone(),
+            data.side.clone(),
+            data.price.parse().unwrap_or_default(),
+            data.quantity.parse().unwrap_or_default(),
+            Decimal::ZERO,
+            // Case-insensitive: the WS stream uses lowercase (`post_only`),
+            // unlike the REST `BinanceOrder` form. Market/IoC orders aren't
+            // distinguished on lifecycle (matching `get_open_orders`); the
+            // maker/taker fee signal lives on `is_maker` of the fill instead.
+            match data.order_type.to_ascii_uppercase().as_str() {
+                "POST_ONLY" => OrderType::PostOnly,
+                _ => OrderType::Limit,
+            },
+        ),
+        OrderUpdateData::Cancel(data) => (
+            data.common.symbol.clone(),
+            data.common.order_id.to_string(),
+            data.common.client_order_id.as_ref().map(ToString::to_string),
+            data.common.status.clone(),
+            String::new(), // SDK Cancel does not surface the original side
+            Decimal::ZERO,
+            Decimal::ZERO,
+            Decimal::ZERO,
+            OrderType::Limit, // Cancel carries no order_type field
+        ),
+    };
     let status = match status_str.as_str() {
         "PARTIALLY_FILLED" => OrderStatus::PartiallyFilled,
         "FILLED" => OrderStatus::Filled,
@@ -164,8 +184,8 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             Side::Buy
         }
     };
-    // TODO(P1-15): read the actual order type from the SDK update when the field is available.
-    // PostOnly orders currently surface as Limit, which affects fee accounting.
+    // TODO(P1-15): Cancel / TradeFill updates carry no order_type field, so
+    // those variants still default to Limit (which affects fee accounting).
     OrderLifecycle {
         exchange: EXCHANGE.into(),
         order: Order {
@@ -173,7 +193,7 @@ pub fn order_update_to_lifecycle(msg: &OrderUpdateMessage) -> OrderLifecycle {
             client_id,
             symbol,
             side,
-            order_type: OrderType::Limit,
+            order_type,
             price,
             quantity,
             filled_quantity,

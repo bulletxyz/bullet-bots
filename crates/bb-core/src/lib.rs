@@ -29,6 +29,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod harness;
+pub mod health;
 pub mod helpers;
 pub mod types;
 

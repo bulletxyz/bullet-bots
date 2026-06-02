@@ -20,7 +20,7 @@ use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, Tick, Trade};
 use bb_core::harness::{Actor, ActorContext, EventHandler, WindDownReason};
 use bb_core::helpers::{ClientIdIssuer, InventoryTracker};
-use bb_core::types::{NewOrder, OrderBook, OrderType, Side};
+use bb_core::types::{NewOrder, OrderBook, OrderType, Position, Side};
 use rust_decimal::Decimal;
 
 use crate::config::{FundingArbConfig, OrderMode};
@@ -440,6 +440,9 @@ impl EventHandler<BookUpdate> for FundingArbActor {
 
 #[async_trait]
 impl EventHandler<Tick> for FundingArbActor {
+    // Cohesive per-tick handler: health checks, per-venue position reconcile,
+    // then the funding-arb state machine. Kept inline for readability.
+    #[allow(clippy::too_many_lines)]
     async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
         // Connection-health checks first — if either broker has lost its WS,
         // we'd be running blind on stale state. Request shutdown so the
@@ -467,14 +470,12 @@ impl EventHandler<Tick> for FundingArbActor {
             tracing::warn!(exchange = %ex, "WS reconnect detected — reconciling positions");
             match broker.get_positions().await {
                 Ok(positions) => {
-                    let venue_pos = positions.iter().find(|p| p.symbol == self.symbol()).map_or(
-                        Decimal::ZERO,
-                        |p| match p.side {
-                            Some(Side::Buy) => p.size,
-                            Some(Side::Sell) => -p.size,
-                            None => Decimal::ZERO,
-                        },
-                    );
+                    let venue_position = positions.iter().find(|p| p.symbol == self.symbol());
+                    let venue_pos = venue_position.map_or(Decimal::ZERO, |p| match p.side {
+                        Some(Side::Buy) => p.size,
+                        Some(Side::Sell) => -p.size,
+                        None => Decimal::ZERO,
+                    });
                     let our_pos = self.net_position(&ex);
                     if venue_pos != our_pos {
                         tracing::warn!(
@@ -483,8 +484,22 @@ impl EventHandler<Tick> for FundingArbActor {
                             actual = %venue_pos,
                             "position drift after reconnect — resetting tracker"
                         );
+                        // Seed from the venue-reported position so the tracker's
+                        // avg_entry_price / realized_pnl invariants stay consistent
+                        // (a bare net_position overwrite would desync them).
+                        let symbol = self.symbol().to_string();
                         if let Some(inv) = self.inventory.get_mut(&ex) {
-                            inv.net_position = venue_pos;
+                            match venue_position {
+                                Some(p) => inv.seed_from_position(p),
+                                // No venue position for this symbol → seed flat.
+                                None => inv.seed_from_position(&Position {
+                                    symbol,
+                                    side: None,
+                                    size: Decimal::ZERO,
+                                    entry_price: Decimal::ZERO,
+                                    unrealized_pnl: Decimal::ZERO,
+                                }),
+                            }
                         }
                     }
                 }

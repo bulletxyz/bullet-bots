@@ -148,7 +148,7 @@ look up brokers by name in their handlers:
 
 ```rust
 async fn on_event(&mut self, event: Trade, cx: &ActorContext) -> Result<(), BotError> {
-    let broker = cx.brokers().require("bullet")?;
+    let broker = cx.broker("bullet")?;
     broker.place_orders(&[replacement_order]).await?;
     Ok(())
 }
@@ -304,10 +304,14 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
   `status_bind = "host:port"` for explicit bind. `symbol` lives inside each
   `[strategy.<name>]` section so multi-symbol setups are explicit.
 - Exchange configs: `type = "<name>"` + adapter-specific fields. Bullet
-  resolves key material in this order: `key_file` (in config) → env
-  `BB_BULLET_KEY_FILE` → env `BB_BULLET_PRIVATE_KEY_HEX` → `private_key_hex`
-  (in config). File-based keystore is preferred — see `bb-bot keygen`.
-  Hyperliquid keys via `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
+  resolves key material in this order (explicit config wins; env fills a
+  field the config omits, so an ambient env var can't silently switch
+  wallets): `key_file` (in config) → env `BB_BULLET_KEY_FILE` →
+  `private_key_hex` (in config) → env `BB_BULLET_PRIVATE_KEY_HEX`. File-based
+  keystore is preferred — see `bb-bot keygen`. Hyperliquid keys via
+  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`. (Standalone `deposit`/`flatten`/`observe`
+  take no config, so there env is the source: `BB_BULLET_KEY_FILE` → env hex
+  → default keystore.)
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style
@@ -323,8 +327,9 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 
 ## Status API
 
-Opt in via `HarnessBuilder::with_status_port(port)`; the example configs all
-set `engine.status_port = 3030`:
+Opt in via `HarnessBuilder::with_status_port(port)`; each example config sets a
+distinct `engine.status_port` (3030–3034) so several bots can run in parallel
+without colliding:
 
 - `GET /health` — liveness check.
 - `GET /status` — uptime plus each actor's JSON snapshot keyed by name.
@@ -342,6 +347,9 @@ slow handler never blocks the endpoint.
 - `MarketDataReplayFeed<E>` — like `ScriptedFeed` but each event carries a
   `unix_ms` timestamp; the feed advances a `TestClock` before each send so
   strategies calling `cx.clock().unix_ms()` see deterministic event-driven time.
+- `TimedFeed<E>` — emits `(delay, event)` pairs, sleeping `delay` before each
+  send. Paired with `tokio::time::pause()` it controls ordering across multiple
+  feeds (e.g. a trade arriving between two book updates) without real delays.
 - `MockBroker` — records all broker calls and returns pre-queued responses.
   Inspect calls via `history()`, `placed_count()`, `last_placed_orders()`;
   queue responses via `queue_place_response(Ok(()))` / `queue_place_response(Err(e))`.

@@ -117,17 +117,32 @@ impl ReferenceArbActor {
         }
     }
 
-    /// Simulated fill price for a market order against the current book.
+    /// Touch price for a market order against the current book.
     /// Uses the far side (market buys eat the ask, market sells eat the bid).
-    /// Falls back to `bullet_mid` if book sides are empty — better than nothing,
-    /// but inflates paper `PnL` because it ignores the half-spread cost.
-    fn simulated_fill_price(&self, side: Side) -> Option<Decimal> {
+    /// Falls back to `bullet_mid` if book sides are empty. This is the raw
+    /// top-of-book; it does not include the slippage cost a real fill incurs —
+    /// see `simulated_fill_price` for the dry-run cost model.
+    fn touch_price(&self, side: Side) -> Option<Decimal> {
         let book = self.bullet_book.as_ref()?;
         let level = match side {
             Side::Buy => book.best_ask(),
             Side::Sell => book.best_bid(),
         };
         level.map(|l| l.price).or(self.bullet_mid)
+    }
+
+    /// Simulated fill price for a dry-run market order. Starts from the touch
+    /// and applies `market_slippage_bps` in the adverse direction (a buy fills
+    /// higher, a sell fills lower) so paper `PnL` uses the same cost model as
+    /// the live `aggressive_ioc_price` bound — otherwise a round trip would
+    /// pocket the spread for free.
+    fn simulated_fill_price(&self, side: Side) -> Option<Decimal> {
+        let base = self.touch_price(side)?;
+        let slip = self.config.market_slippage_bps / Decimal::from(BPS_SCALE);
+        Some(match side {
+            Side::Buy => base * (Decimal::ONE + slip),
+            Side::Sell => base * (Decimal::ONE - slip),
+        })
     }
 
     /// Worst-case `IoC` limit price for a "market" order on Bullet. Bullet's
@@ -137,7 +152,7 @@ impl ReferenceArbActor {
     /// or better than the true top-of-book, not at this worst-case bound.
     fn aggressive_ioc_price(&self, side: Side) -> Option<Decimal> {
         let mid = self.bullet_mid?;
-        let base = self.simulated_fill_price(side).unwrap_or(mid);
+        let base = self.touch_price(side).unwrap_or(mid);
         let slip = self.config.market_slippage_bps / Decimal::from(BPS_SCALE);
         Some(match side {
             Side::Buy => base * (Decimal::ONE + slip),
@@ -671,6 +686,13 @@ impl EventHandler<OrderLifecycle> for ReferenceArbActor {
 #[async_trait]
 impl EventHandler<Tick> for ReferenceArbActor {
     async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
+        if let Ok(broker) = cx.broker(&self.config.exchange)
+            && broker.is_disconnected()
+        {
+            tracing::error!("reference-arb broker disconnected — requesting shutdown");
+            cx.request_shutdown();
+            return Ok(());
+        }
         // 1. Advance hold counter and check timeout.
         let timeout_fired = matches!(
             &self.state,
@@ -689,16 +711,11 @@ impl EventHandler<Tick> for ReferenceArbActor {
             self.place_exit(cx, ExitReason::Timeout, spread).await?;
         }
 
-        // 2. If we hold residual inventory but no in-flight order (e.g. after a cancelled exit),
-        //    retry the exit.
-        if matches!(&self.state, ArbState::Holding { .. }) && !self.inventory.net_position.is_zero()
-        {
-            // Do nothing — normal Holding state, exit driven by spread. The
-            // reconcile branch only fires when state is confused; see note in
-            // OrderLifecycle Cancelled handling.
-        }
+        // Holding state with residual inventory is normal — the exit is driven
+        // by spread (see the OrderLifecycle Cancelled handling), so there is
+        // nothing to do here on a tick.
 
-        // 3. Status log at INFO.
+        // 2. Status log at INFO.
         tracing::info!(
             state = self.state.kind(),
             spread_bps = ?self.compute_spread_bps(),

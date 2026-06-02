@@ -10,7 +10,7 @@
 
 [engine]
 tick_interval_ms = 5000
-status_port = 3030
+status_port = 3030  # must be unique per running bot — collides if two bots share a port
 
 [exchanges.bullet]
 type = "bullet"

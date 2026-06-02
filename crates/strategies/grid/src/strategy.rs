@@ -482,10 +482,13 @@ impl EventHandler<OrderLifecycle> for GridActor {
         // Cancelled/rejected → flip back to Pending so the tick re-places.
         // Log so an operator can tell a venue-side auto-cancel (e.g. order
         // TTL expiry on some testnets) apart from a bug in our reconcile.
+        let cid = event.order.client_id.as_deref();
+        let oid = event.order.id.as_str();
         if matches!(event.order.status, OrderStatus::Cancelled | OrderStatus::Rejected)
-            && let Some(cid) = event.order.client_id.as_deref()
-            && let Some(level) =
-                self.state.levels.iter_mut().find(|l| l.client_id.as_deref() == Some(cid))
+            && let Some(level) = self.state.levels.iter_mut().find(|l| {
+                (cid.is_some() && l.client_id.as_deref() == cid)
+                    || (!oid.is_empty() && l.order_id.as_deref() == Some(oid))
+            })
             && level.state == LevelState::Active
         {
             tracing::info!(
@@ -506,6 +509,13 @@ impl EventHandler<OrderLifecycle> for GridActor {
 #[async_trait]
 impl EventHandler<Tick> for GridActor {
     async fn on_event(&mut self, _event: Tick, cx: &ActorContext) -> Result<(), BotError> {
+        if let Ok(broker) = cx.broker(self.exchange())
+            && broker.is_disconnected()
+        {
+            tracing::error!("grid broker disconnected — requesting shutdown");
+            cx.request_shutdown();
+            return Ok(());
+        }
         self.handle_trend_filter(cx).await?;
         if self.state.paused {
             return Ok(());
