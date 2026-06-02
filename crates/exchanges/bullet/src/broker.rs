@@ -252,32 +252,34 @@ impl Broker for BulletBroker {
 
         match self.client.place_orders(market_id, sdk_orders, false, None).await {
             Ok(resp) => {
-                // Bullet echoes each accepted order as a `place_order` event in
-                // the submit response, carrying the venue order_id alongside the
-                // client_order_id we sent. Map them back so we can surface the
-                // assigned order_id synchronously rather than making the strategy
-                // wait for the WS user-data stream. Keyed by the numeric
-                // client_order_id (same normalization as the send path above, so
-                // non-canonical input strings like "00123" still match).
-                let id_map: HashMap<u64, String> = resp
+                // Bullet echoes each accepted order as a `place_order` event
+                // carrying its venue order_id + the client_order_id we sent, so we
+                // surface the order_id now instead of awaiting the WS stream.
+                // Keyed by client_order_id (not zipped positionally) so it survives
+                // partial acceptance, interleaved events, and reordering.
+                let oids: HashMap<u64, String> = resp
                     .events
                     .iter()
                     .filter_map(|ev| convert::place_order_ids(&ev.value))
                     .collect();
-                tracing::debug!(tx_id = %resp.id, status = ?resp.status, oids = id_map.len(), "Orders placed");
-                Ok(orders
+                tracing::debug!(tx_id = %resp.id, status = ?resp.status, oids = oids.len(), "Orders placed");
+                let results = orders
                     .iter()
-                    .map(|o| OrderResult {
-                        order_id: o
+                    .map(|o| {
+                        let order_id = o
                             .client_id
                             .as_deref()
                             .and_then(|c| c.parse::<u64>().ok())
-                            .and_then(|n| id_map.get(&n).cloned()),
-                        client_id: o.client_id.clone(),
-                        success: true,
-                        error: None,
+                            .and_then(|cid| oids.get(&cid).cloned());
+                        OrderResult {
+                            order_id,
+                            client_id: o.client_id.clone(),
+                            success: true,
+                            error: None,
+                        }
                     })
-                    .collect())
+                    .collect();
+                Ok(results)
             }
             Err(e) => {
                 // Broker is intentionally a thin pass-through: an HTTP error
