@@ -9,14 +9,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use bb_core::broker::Broker;
 use bb_core::config::{EngineConfig, ValidateConfig};
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Tick, Trade};
 use bb_core::harness::{ActorSpec, HarnessBuilder};
 use bb_core::helpers::TickFeed;
 use bb_exchange_binance::{BinanceMarket, ReferencePriceUpdate, connect_binance};
-use bb_exchange_bullet::{BulletConfig, connect_bullet};
+use bb_exchange_bullet::{BulletConfig, BulletFeeds, connect_bullet};
 use bb_exchange_hyperliquid::{HyperliquidConfig, connect_hyperliquid};
 use bb_strategy_avellaneda_stoikov::{AvellanedaStoikovActor, AvellanedaStoikovConfig};
 use bb_strategy_funding_arb::{FundingArbActor, FundingArbConfig};
@@ -31,6 +30,10 @@ use clap::{Parser, Subcommand};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
+
+mod observer;
+
+use observer::ObserverActor;
 
 #[derive(Parser)]
 #[command(name = "bb-bot", about = "Bullet Bots trading system")]
@@ -108,8 +111,12 @@ struct AppConfig {
 
 #[derive(Debug, Deserialize)]
 struct ExchangeEntry {
-    /// Kept so serde accepts the `type = "..."` tag in config files; we
-    /// dispatch by the `HashMap` key (`bullet` / `hyperliquid`) in practice.
+    /// The `type = "..."` tag in `[exchanges.<name>]`. Required so serde
+    /// accepts configs that carry it, but **not** used for dispatch: exchanges
+    /// are looked up by their `HashMap` key (`bullet` / `hyperliquid`), so the
+    /// value here is effectively cosmetic. (Contrast `StrategyEntry::type`,
+    /// which *is* the dispatch key.) `#[allow(dead_code)]` because nothing
+    /// reads the field after deserialization.
     #[serde(rename = "type")]
     #[allow(dead_code)]
     exchange_type: String,
@@ -207,6 +214,22 @@ where
 
 // -- Dispatch: one function per strategy type -------------------------------
 
+/// Wire the Bullet broker and its four standard feeds (trade / book /
+/// lifecycle / mark) onto a `HarnessBuilder`. Per-strategy extras (tick feed,
+/// reference feeds, the actor + its `.sub::<E>()`s) stay at the call site.
+fn wire_bullet(
+    builder: HarnessBuilder,
+    broker: Arc<dyn Broker>,
+    feeds: BulletFeeds,
+) -> HarnessBuilder {
+    builder
+        .wire_broker("bullet", broker)
+        .wire_feed_named("bullet-trades", feeds.trade)
+        .wire_feed_named("bullet-book", feeds.book)
+        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
+        .wire_feed_named("bullet-mark", feeds.mark_price)
+}
+
 async fn run_simple_mm(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let bullet_cfg: BulletConfig = parse_exchange_config(&config.exchanges, "bullet")?;
     let mm_cfg: SimpleMmConfig = sub_strategy(&config.strategy, "simple-mm")?;
@@ -217,13 +240,8 @@ async fn run_simple_mm(config: AppConfig) -> Result<(), Box<dyn std::error::Erro
     let actor = SimpleMmActor::new(mm_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
-        .with_status_config(&config.engine)
-        .enable_signal_shutdown()
-        .wire_broker("bullet", broker)
-        .wire_feed_named("bullet-trades", feeds.trade)
-        .wire_feed_named("bullet-book", feeds.book)
-        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
+    let builder = HarnessBuilder::new().with_status_config(&config.engine).enable_signal_shutdown();
+    let harness = wire_bullet(builder, broker, feeds)
         .wire_feed_named("ticks", tick)
         .wire_actor(
             ActorSpec::new("simple-mm", actor)
@@ -248,14 +266,8 @@ async fn run_grid(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let grid = GridActor::new(grid_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
-        .with_status_config(&config.engine)
-        .enable_signal_shutdown()
-        .wire_broker("bullet", broker)
-        .wire_feed_named("bullet-trades", feeds.trade)
-        .wire_feed_named("bullet-book", feeds.book)
-        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
-        .wire_feed_named("bullet-mark", feeds.mark_price)
+    let builder = HarnessBuilder::new().with_status_config(&config.engine).enable_signal_shutdown();
+    let harness = wire_bullet(builder, broker, feeds)
         .wire_feed_named("ticks", tick)
         .wire_actor(
             ActorSpec::new("grid", grid)
@@ -293,15 +305,8 @@ async fn run_avellaneda_stoikov(config: AppConfig) -> Result<(), Box<dyn std::er
     let actor = AvellanedaStoikovActor::new(strat_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let mut builder = HarnessBuilder::new()
-        .with_status_config(&config.engine)
-        .enable_signal_shutdown()
-        .wire_broker("bullet", broker)
-        .wire_feed_named("bullet-trades", feeds.trade)
-        .wire_feed_named("bullet-book", feeds.book)
-        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
-        .wire_feed_named("bullet-mark", feeds.mark_price)
-        .wire_feed_named("ticks", tick);
+    let base = HarnessBuilder::new().with_status_config(&config.engine).enable_signal_shutdown();
+    let mut builder = wire_bullet(base, broker, feeds).wire_feed_named("ticks", tick);
 
     let mut spec = ActorSpec::new("avellaneda-stoikov", actor)
         .sub::<BookUpdate>()
@@ -334,15 +339,9 @@ async fn run_funding_arb(config: AppConfig) -> Result<(), Box<dyn std::error::Er
     let actor = FundingArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
-        .with_status_config(&config.engine)
-        .enable_signal_shutdown()
-        .wire_broker("bullet", bullet_broker)
+    let base = HarnessBuilder::new().with_status_config(&config.engine).enable_signal_shutdown();
+    let harness = wire_bullet(base, bullet_broker, bullet_feeds)
         .wire_broker("hyperliquid", hl_broker)
-        .wire_feed_named("bullet-trades", bullet_feeds.trade)
-        .wire_feed_named("bullet-book", bullet_feeds.book)
-        .wire_feed_named("bullet-lifecycle", bullet_feeds.lifecycle)
-        .wire_feed_named("bullet-mark", bullet_feeds.mark_price)
         .wire_feed_named("hl-trades", hl_feeds.trade)
         .wire_feed_named("hl-book", hl_feeds.book)
         .wire_feed_named("hl-lifecycle", hl_feeds.lifecycle)
@@ -373,13 +372,8 @@ async fn run_reference_arb(config: AppConfig) -> Result<(), Box<dyn std::error::
     let actor = ReferenceArbActor::new(arb_cfg);
     let tick = TickFeed::new(Duration::from_millis(config.engine.tick_interval_ms));
 
-    let harness = HarnessBuilder::new()
-        .with_status_config(&config.engine)
-        .enable_signal_shutdown()
-        .wire_broker("bullet", broker)
-        .wire_feed_named("bullet-trades", feeds.trade)
-        .wire_feed_named("bullet-book", feeds.book)
-        .wire_feed_named("bullet-lifecycle", feeds.lifecycle)
+    let base = HarnessBuilder::new().with_status_config(&config.engine).enable_signal_shutdown();
+    let harness = wire_bullet(base, broker, feeds)
         .wire_feed_named("binance-ref", ref_feed)
         .wire_feed_named("ticks", tick)
         .wire_actor(
@@ -486,6 +480,12 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     println!();
     println!("Fund via faucet:");
     println!("  curl -X POST \"https://{faucet_host}/api/testnet/faucet?address={address}\"");
+    println!();
+    println!(
+        "Then initialize your trading account (the faucet funds the wallet, not the account):"
+    );
+    println!("  cargo run --bin bb-bot -- deposit --network {network} --asset USDC --amount 5000");
+    println!("Without this, order placement fails with: user_variants not found");
     Ok(())
 }
 
@@ -536,6 +536,44 @@ fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
         .into())
 }
 
+/// Parse a network name into a [`Network`], accepting only `"mainnet"` /
+/// `"testnet"`. Unlike `Network::from`, an unknown value is a hard error
+/// rather than silently mapping to `Network::Custom` — matching how
+/// `connect_bullet` validates the network in the `run` path.
+fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
+    match s {
+        "mainnet" => Ok(Network::Mainnet),
+        "testnet" => Ok(Network::Testnet),
+        other => Err(bb_core::error::BotError::config(format!(
+            "Unknown Bullet network '{other}' — use 'mainnet' or 'testnet'"
+        ))),
+    }
+}
+
+/// Build a [`BulletConfig`] for standalone commands (`flatten` / `observe`)
+/// that don't load a TOML config. Resolves key material the same way as
+/// `connect_bullet` / `load_deposit_keypair`: `BB_BULLET_KEY_FILE` env wins,
+/// else the default `~/.config/bullet/id.json` keystore if it exists, with the
+/// `BB_BULLET_PRIVATE_KEY_HEX` env as a fallback. This lets a user who ran
+/// `bb-bot keygen` (which writes the default keystore) use these commands with
+/// no extra env setup. `connect_bullet` enforces that at least one source
+/// yields usable key material.
+fn bullet_config_from_env(network: String) -> BulletConfig {
+    use secrecy::SecretString;
+
+    let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
+        let default = default_key_path();
+        default.exists().then_some(default)
+    });
+    BulletConfig {
+        network,
+        key_file,
+        private_key_hex: SecretString::new(
+            std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default(),
+        ),
+    }
+}
+
 async fn deposit(
     network: String,
     asset: String,
@@ -544,7 +582,7 @@ async fn deposit(
     let keypair = load_deposit_keypair()?;
     let address = keypair.address();
     let client =
-        Client::builder().network(Network::from(network.as_str())).keypair(keypair).build().await?;
+        Client::builder().network(parse_network(&network)?).keypair(keypair).build().await?;
 
     let info = client.exchange_info().await?.into_inner();
     let asset_entry = info
@@ -568,18 +606,12 @@ async fn deposit(
 
 async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::error::Error>> {
     use bb_core::types::{NewOrder, OrderType, Side};
-    use secrecy::SecretString;
     const FLATTEN_SLIPPAGE_BPS: u64 = 100;
 
     // Reuse the adapter's connect path to get a real Broker. We don't need the
-    // feeds — just a broker handle. The env-var flow populates key material.
-    let bullet_cfg = BulletConfig {
-        network,
-        key_file: std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into),
-        private_key_hex: SecretString::new(
-            std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default(),
-        ),
-    };
+    // feeds — just a broker handle. Key material resolves via env or the
+    // default keystore written by `bb-bot keygen`.
+    let bullet_cfg = bullet_config_from_env(network);
     let (broker, _feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
 
     let _ = broker.cancel_all_orders(&symbol).await;
@@ -649,143 +681,6 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
 
 // -- Observe: record (ts, bullet_mid, binance_mid, spread_bps) CSV ---------
 
-struct ObserverActor {
-    symbol: String,
-    binance_symbol: String,
-    file: std::io::BufWriter<std::fs::File>,
-    bullet_mid: Option<Decimal>,
-    binance_mid: Option<Decimal>,
-    last_written: Option<(Decimal, Decimal)>,
-    rows: u64,
-    events: u64,
-}
-
-impl ObserverActor {
-    fn new(
-        symbol: String,
-        binance_symbol: String,
-        path: &std::path::Path,
-    ) -> std::io::Result<Self> {
-        use std::io::Write;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let file = std::fs::File::create(path)?;
-        let mut file = std::io::BufWriter::new(file);
-        writeln!(file, "ts_unix_ms,bullet_mid,binance_mid,spread_bps")?;
-        Ok(Self {
-            symbol,
-            binance_symbol,
-            file,
-            bullet_mid: None,
-            binance_mid: None,
-            last_written: None,
-            rows: 0,
-            events: 0,
-        })
-    }
-
-    /// Write a row only when either mid has changed since the last write.
-    /// Bullet testnet can emit many `BookUpdate` events per second with an
-    /// unchanged top-of-book; recording them all produces GB-scale CSVs
-    /// of duplicates.
-    fn record(&mut self) -> std::io::Result<()> {
-        use std::io::Write;
-        self.events += 1;
-        let (Some(b), Some(r)) = (self.bullet_mid, self.binance_mid) else {
-            return Ok(());
-        };
-        if r.is_zero() {
-            return Ok(());
-        }
-        if self.last_written == Some((b, r)) {
-            return Ok(());
-        }
-        let spread_bps = (b - r) / r * Decimal::from(10_000);
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis());
-        writeln!(self.file, "{ts},{b},{r},{spread_bps}")?;
-        self.last_written = Some((b, r));
-        self.rows += 1;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl bb_core::harness::Actor for ObserverActor {
-    async fn init(
-        &mut self,
-        _cx: &bb_core::harness::ActorContext,
-    ) -> Result<(), bb_core::error::BotError> {
-        tracing::info!(symbol = %self.symbol, binance = %self.binance_symbol, "observer started");
-        Ok(())
-    }
-    async fn wind_down(
-        &mut self,
-        _reason: &bb_core::harness::WindDownReason,
-        _cx: &bb_core::harness::ActorContext,
-    ) -> Result<(), bb_core::error::BotError> {
-        use std::io::Write;
-        let _ = self.file.flush();
-        tracing::info!(rows = self.rows, "observer final — flushed CSV");
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl bb_core::harness::EventHandler<BookUpdate> for ObserverActor {
-    async fn on_event(
-        &mut self,
-        event: BookUpdate,
-        _cx: &bb_core::harness::ActorContext,
-    ) -> Result<(), bb_core::error::BotError> {
-        if event.symbol != self.symbol {
-            return Ok(());
-        }
-        if let Some(mid) = event.orderbook.midpoint() {
-            self.bullet_mid = Some(mid);
-        }
-        self.record().map_err(|e| bb_core::error::BotError::strategy(e.to_string()))
-    }
-}
-
-#[async_trait]
-impl bb_core::harness::EventHandler<ReferencePriceUpdate> for ObserverActor {
-    async fn on_event(
-        &mut self,
-        event: ReferencePriceUpdate,
-        _cx: &bb_core::harness::ActorContext,
-    ) -> Result<(), bb_core::error::BotError> {
-        if !event.symbol.eq_ignore_ascii_case(&self.binance_symbol) {
-            return Ok(());
-        }
-        self.binance_mid = Some(event.mid);
-        self.record().map_err(|e| bb_core::error::BotError::strategy(e.to_string()))
-    }
-}
-
-#[async_trait]
-impl bb_core::harness::EventHandler<Tick> for ObserverActor {
-    async fn on_event(
-        &mut self,
-        _event: Tick,
-        _cx: &bb_core::harness::ActorContext,
-    ) -> Result<(), bb_core::error::BotError> {
-        use std::io::Write;
-        // Flush every tick so a Ctrl-C doesn't lose the last seconds of data.
-        let _ = self.file.flush();
-        tracing::info!(
-            rows_written = self.rows,
-            events_seen = self.events,
-            bullet_mid = ?self.bullet_mid,
-            binance_mid = ?self.binance_mid,
-            "observer tick"
-        );
-        Ok(())
-    }
-}
-
 async fn observe(
     network: String,
     symbol: String,
@@ -793,15 +688,7 @@ async fn observe(
     binance_market: String,
     output: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use secrecy::SecretString;
-
-    let bullet_cfg = BulletConfig {
-        network,
-        key_file: std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into),
-        private_key_hex: SecretString::new(
-            std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default(),
-        ),
-    };
+    let bullet_cfg = bullet_config_from_env(network);
 
     let (_broker, bullet_feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
     let market: BinanceMarket = binance_market.parse()?;
