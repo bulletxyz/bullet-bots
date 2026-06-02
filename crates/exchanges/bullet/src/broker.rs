@@ -256,8 +256,10 @@ impl Broker for BulletBroker {
                 // the submit response, carrying the venue order_id alongside the
                 // client_order_id we sent. Map them back so we can surface the
                 // assigned order_id synchronously rather than making the strategy
-                // wait for the WS user-data stream.
-                let id_map: HashMap<String, String> = resp
+                // wait for the WS user-data stream. Keyed by the numeric
+                // client_order_id (same normalization as the send path above, so
+                // non-canonical input strings like "00123" still match).
+                let id_map: HashMap<u64, String> = resp
                     .events
                     .iter()
                     .filter_map(|ev| convert::place_order_ids(&ev.value))
@@ -266,7 +268,11 @@ impl Broker for BulletBroker {
                 Ok(orders
                     .iter()
                     .map(|o| OrderResult {
-                        order_id: o.client_id.as_deref().and_then(|c| id_map.get(c).cloned()),
+                        order_id: o
+                            .client_id
+                            .as_deref()
+                            .and_then(|c| c.parse::<u64>().ok())
+                            .and_then(|n| id_map.get(&n).cloned()),
                         client_id: o.client_id.clone(),
                         success: true,
                         error: None,
