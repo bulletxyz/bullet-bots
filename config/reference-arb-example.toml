@@ -1,4 +1,4 @@
-# Reference-price arbitrage: trade Bullet against a Binance spot reference.
+# Reference-price arbitrage: trade Bullet against a Binance perp reference.
 # Run with: cargo run --bin bb-bot -- run --config config/reference-arb-example.toml
 #
 # The strategy opens a directional market position on Bullet whenever its book

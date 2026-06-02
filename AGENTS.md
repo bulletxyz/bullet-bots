@@ -148,7 +148,7 @@ look up brokers by name in their handlers:
 
 ```rust
 async fn on_event(&mut self, event: Trade, cx: &ActorContext) -> Result<(), BotError> {
-    let broker = cx.brokers().require("bullet")?;
+    let broker = cx.broker("bullet")?;
     broker.place_orders(&[replacement_order]).await?;
     Ok(())
 }
@@ -323,8 +323,9 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 
 ## Status API
 
-Opt in via `HarnessBuilder::with_status_port(port)`; the example configs all
-set `engine.status_port = 3030`:
+Opt in via `HarnessBuilder::with_status_port(port)`; each example config sets a
+distinct `engine.status_port` (3030–3034) so several bots can run in parallel
+without colliding:
 
 - `GET /health` — liveness check.
 - `GET /status` — uptime plus each actor's JSON snapshot keyed by name.
@@ -342,6 +343,9 @@ slow handler never blocks the endpoint.
 - `MarketDataReplayFeed<E>` — like `ScriptedFeed` but each event carries a
   `unix_ms` timestamp; the feed advances a `TestClock` before each send so
   strategies calling `cx.clock().unix_ms()` see deterministic event-driven time.
+- `TimedFeed<E>` — emits `(delay, event)` pairs, sleeping `delay` before each
+  send. Paired with `tokio::time::pause()` it controls ordering across multiple
+  feeds (e.g. a trade arriving between two book updates) without real delays.
 - `MockBroker` — records all broker calls and returns pre-queued responses.
   Inspect calls via `history()`, `placed_count()`, `last_placed_orders()`;
   queue responses via `queue_place_response(Ok(()))` / `queue_place_response(Err(e))`.

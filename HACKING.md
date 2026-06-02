@@ -66,6 +66,10 @@ fn default_exchange() -> String { "bullet".to_string() }
 
 ## 3. The actor
 
+Inside a handler, reach the REST side with `cx.broker(name)` — it returns the
+broker registered under that name (the one passed to
+`HarnessBuilder::wire_broker`) or an error if no such broker is wired.
+
 `crates/strategies/dip-buyer/src/lib.rs`:
 
 ```rust
@@ -274,7 +278,9 @@ status_port = 3030
 [exchanges.bullet]
 type = "bullet"
 network = "testnet"
-private_key_hex = ""
+# Key material — do NOT put private keys in this file.
+# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
+# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY_HEX="0x..."
 
 [strategy]
 type = "dip-buyer"
