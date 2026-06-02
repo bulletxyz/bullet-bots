@@ -1,0 +1,33 @@
+AGENTS.md
+  s_3aeee9d31a3a23::t_3c918bfc67f4c1 307-311
+crates/exchanges/bullet/src/connection.rs
+  s_3aeee9d31a3a23::t_cf18b03a40ec45 38-69
+  s_3aeee9d31a3a23::t_e17b4c619d603f 16
+  s_3aeee9d31a3a23::t_670b6d99ea2a12 232
+  s_3aeee9d31a3a23::t_dbd64529f58d03 266-289
+  s_3aeee9d31a3a23::t_ff7990fa219905 195
+crates/bb-bot/src/observer.rs
+  s_3aeee9d31a3a23::t_a2dcbb76a6db6e 87-91
+crates/bb-core/src/harness/actor.rs
+  s_3aeee9d31a3a23::t_bc7e961a7b5443 58-60
+crates/exchanges/bullet/src/convert.rs
+  s_3aeee9d31a3a23::t_294bb00184e2a2 148-152
+crates/bb-bot/src/main.rs
+  s_3aeee9d31a3a23::t_efbc8220ae9ee6 564,566-574,576
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9f41d803d03ada63715e8e50148e09dbede06b8c",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
