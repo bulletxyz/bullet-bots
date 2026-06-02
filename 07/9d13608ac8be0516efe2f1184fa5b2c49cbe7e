@@ -1,0 +1,38 @@
+crates/bb-core/src/lib.rs
+  s_3aeee9d31a3a23::t_0e31ae4429bfae 32
+crates/exchanges/hyperliquid/src/broker.rs
+  s_3aeee9d31a3a23::t_bfaa61aa5dd7c9 89,93
+  s_3aeee9d31a3a23::t_78a101c482cc97 20
+crates/exchanges/hyperliquid/src/connection.rs
+  s_3aeee9d31a3a23::t_76dff19b74165b 172,178,191
+  s_3aeee9d31a3a23::t_aeeb25b2cbf3a3 22,27
+  s_3aeee9d31a3a23::t_a016f2508a77a4 82
+crates/strategies/funding-arb/src/strategy.rs
+  s_3aeee9d31a3a23::t_10e09767b96f2c 443-445
+crates/bb-core/src/health.rs
+  s_3aeee9d31a3a23::t_fad04ce7a4d80a 15-18
+  s_3aeee9d31a3a23::t_093e3c0c9f2fe3 1-14,19-49
+crates/exchanges/bullet/src/connection.rs
+  s_3aeee9d31a3a23::t_0d07ce8c150fdd 21
+  s_3aeee9d31a3a23::t_ae0e2c5df0a927 29
+  s_3aeee9d31a3a23::t_ecb670cf3e6af8 161,205,209
+crates/exchanges/bullet/src/broker.rs
+  s_3aeee9d31a3a23::t_fd32a5a5e7dfee 13
+  s_3aeee9d31a3a23::t_52260412007472 107,111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "079d13608ac8be0516efe2f1184fa5b2c49cbe7e",
+  "prompts": {},
+  "sessions": {
+    "s_3aeee9d31a3a23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbabb169-aba7-40bf-9055-324bb21234e3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
