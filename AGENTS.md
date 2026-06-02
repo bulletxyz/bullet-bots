@@ -304,11 +304,14 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
   `status_bind = "host:port"` for explicit bind. `symbol` lives inside each
   `[strategy.<name>]` section so multi-symbol setups are explicit.
 - Exchange configs: `type = "<name>"` + adapter-specific fields. Bullet
-  resolves key material in this order (env overrides config, per
-  `load_config`): env `BB_BULLET_KEY_FILE` → `key_file` (in config) → env
-  `BB_BULLET_PRIVATE_KEY_HEX` → `private_key_hex` (in config). File-based
+  resolves key material in this order (explicit config wins; env fills a
+  field the config omits, so an ambient env var can't silently switch
+  wallets): `key_file` (in config) → env `BB_BULLET_KEY_FILE` →
+  `private_key_hex` (in config) → env `BB_BULLET_PRIVATE_KEY_HEX`. File-based
   keystore is preferred — see `bb-bot keygen`. Hyperliquid keys via
-  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
+  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`. (Standalone `deposit`/`flatten`/`observe`
+  take no config, so there env is the source: `BB_BULLET_KEY_FILE` → env hex
+  → default keystore.)
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style

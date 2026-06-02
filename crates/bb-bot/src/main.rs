@@ -149,10 +149,17 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     if let Some(bullet) = config.exchanges.get_mut("bullet")
         && let Some(table) = bullet.config.as_table_mut()
     {
-        if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
+        // Explicit config wins; env only fills a field the config omits or
+        // leaves empty. For a trading bot this avoids an ambient
+        // BB_BULLET_KEY_FILE silently overriding the wallet set in config.
+        if table.get("key_file").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Ok(path) = std::env::var("BB_BULLET_KEY_FILE")
+        {
             table.insert("key_file".to_string(), toml::Value::String(path));
         }
-        if let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
+        if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX")
+        {
             table.insert("private_key_hex".to_string(), toml::Value::String(key));
         }
     }
