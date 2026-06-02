@@ -86,6 +86,12 @@ pub struct MarkPriceUpdate {
 /// corresponding Unix timestamp in milliseconds — useful for replay pacing
 /// and for actors that need wall-clock time without importing
 /// `SystemTime::now()`.
+///
+/// Note: `unix_ms` is self-stamped from the real wall clock when the tick is
+/// produced. Actors doing time-sensitive logic should prefer
+/// `cx.clock().unix_ms()` over `tick.unix_ms`: under a `TestClock`
+/// (deterministic replay) the clock is driven by the replayed event stream, so
+/// the self-stamped `tick.unix_ms` and `cx.clock()` can disagree.
 #[derive(Debug, Clone)]
 pub struct Tick {
     pub at: Instant,

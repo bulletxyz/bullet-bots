@@ -17,7 +17,7 @@ use async_trait::async_trait;
 
 use super::event::Event;
 use crate::broker::{Broker, BrokerRegistry};
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
 use crate::error::BotError;
 
 /// Shared context available inside `init`, `on_event`, and `wind_down`. Holds
@@ -31,14 +31,6 @@ pub struct ActorContext {
 }
 
 impl ActorContext {
-    pub fn new(
-        name: Arc<str>,
-        brokers: Arc<BrokerRegistry>,
-        shutdown: tokio_util::sync::CancellationToken,
-    ) -> Self {
-        Self::with_clock(name, brokers, Arc::new(SystemClock), shutdown)
-    }
-
     pub fn with_clock(
         name: Arc<str>,
         brokers: Arc<BrokerRegistry>,
@@ -60,12 +52,6 @@ impl ActorContext {
             .get(name)
             .map(Arc::clone)
             .ok_or_else(|| BotError::UnknownExchange(name.to_string()))
-    }
-
-    /// Full registry — for the rare case (e.g. funding-arb) that needs to
-    /// iterate all brokers. Prefer [`broker`] when you know the name.
-    pub fn brokers(&self) -> &BrokerRegistry {
-        &self.brokers
     }
 
     /// The harness clock. Use `cx.clock().unix_ms()` for wall-clock time,

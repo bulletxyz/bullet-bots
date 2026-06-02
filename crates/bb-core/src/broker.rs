@@ -109,10 +109,6 @@ impl BrokerRegistry {
     pub fn get(&self, name: &str) -> Option<&Arc<dyn Broker>> {
         self.by_name.get(name)
     }
-
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(std::ops::Deref::deref)
-    }
 }
 
 impl std::fmt::Debug for BrokerRegistry {
