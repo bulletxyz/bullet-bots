@@ -1,0 +1,29 @@
+config/reference-arb-example.toml
+  s_14b07560542dd9::t_f72484057745e5 19
+config/funding-arb-example.toml
+  s_14b07560542dd9::t_cff826a67342b5 13
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_3f2218460f4f2d 568-569
+config/simple-mm-example.toml
+  s_14b07560542dd9::t_c5e9191b15b983 20
+config/grid-example.toml
+  s_14b07560542dd9::t_d37006554f84e9 27
+config/avellaneda-stoikov-example.toml
+  s_14b07560542dd9::t_706a0bfdd0705f 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "5fde9b15d60c16dce5b2345c26e205b11bd919cb",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
