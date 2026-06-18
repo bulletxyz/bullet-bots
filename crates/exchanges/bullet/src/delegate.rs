@@ -27,7 +27,10 @@ pub async fn resolve_account_address(base_url: &str, signer: &str) -> Result<Str
         .await
         .map_err(|e| BotError::exchange(format!("delegateOf request failed: {e}"), true))?;
     let status = resp.status().as_u16();
-    let body = resp.text().await.unwrap_or_default();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| BotError::exchange(format!("delegateOf body read failed: {e}"), true))?;
     account_address_from(signer, status, &body)
 }
 
