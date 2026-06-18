@@ -1,0 +1,27 @@
+README.md
+  s_14b07560542dd9::t_f487c01281f675 79-82
+crates/exchanges/bullet/src/delegate.rs
+  s_14b07560542dd9::t_73c6aef3196485 73-83
+  s_14b07560542dd9::t_2b34231d98f806 48-50
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_2898dc99dc3222 162,164-166
+  s_14b07560542dd9::t_f5721b08e96282 537
+  s_14b07560542dd9::t_d01000432017cf 587
+  s_14b07560542dd9::t_ac699613844f98 546,551-559
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "5524e266b86b11f35abcd9e32ee6ac7c29a7d7ad",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
