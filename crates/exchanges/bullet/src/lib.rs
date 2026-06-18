@@ -2,6 +2,7 @@ pub mod broker;
 pub mod config;
 pub mod connection;
 pub mod convert;
+pub mod delegate;
 pub mod key;
 
 pub use broker::BulletBroker;

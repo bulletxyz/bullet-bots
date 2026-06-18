@@ -26,6 +26,7 @@ rust_decimal = { version = "1", features = ["serde-with-str"] }
 thiserror = "2"
 secrecy = { version = "0.8", features = ["serde"] }
 bs58 = "0.5"
+reqwest = { version = "0.13", features = ["json"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"

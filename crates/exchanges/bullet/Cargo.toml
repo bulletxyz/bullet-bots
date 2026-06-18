@@ -19,6 +19,7 @@ secrecy = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 bs58 = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }
