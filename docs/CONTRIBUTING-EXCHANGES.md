@@ -84,6 +84,13 @@ Adjust for venues that use a different suffix convention.
 - Use `secrecy::ExposeSecret::expose_secret(&config.private_key_hex)` only
   at the point of actual key use, not earlier.
 
+Bullet API docs are machine-readable: see
+<https://tradingapi.bullet.xyz/llms.txt> for an index, the raw OpenAPI spec at
+<https://tradingapi.bullet.xyz/docs/rest/openapi.json>, and the
+[delegate accounts](https://tradingapi.bullet.xyz/docs/delegate-accounts.md)
+guide (delegate keys 404 on account reads — resolve the master via
+`/api/v1/delegateOf` first).
+
 ## Reconnect patterns
 
 Two supported patterns — pick the one your SDK offers:

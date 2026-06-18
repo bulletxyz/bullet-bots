@@ -307,11 +307,15 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
   resolves key material in this order (explicit config wins; env fills a
   field the config omits, so an ambient env var can't silently switch
   wallets): `key_file` (in config) → env `BB_BULLET_KEY_FILE` →
-  `private_key_hex` (in config) → env `BB_BULLET_PRIVATE_KEY_HEX`. File-based
-  keystore is preferred — see `bb-bot keygen`. Hyperliquid keys via
-  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`. (Standalone `deposit`/`flatten`/`observe`
-  take no config, so there env is the source: `BB_BULLET_KEY_FILE` → env hex
-  → default keystore.)
+  `private_key` (in config, alias `private_key_hex`) → env
+  `BB_BULLET_PRIVATE_KEY` (alias `BB_BULLET_PRIVATE_KEY_HEX`). The key string
+  may be base58 (Phantom / delegation export) or hex. If the signer is a
+  **delegate** key, the adapter resolves it to its master account (via the
+  `delegateOf` endpoint) for all reads and the user-orders subscription;
+  signing uses the delegate key directly. File-based keystore is preferred —
+  see `bb-bot keygen`. Hyperliquid keys via `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
+  (Standalone `deposit`/`flatten`/`observe` take no config, so there env is
+  the source: `BB_BULLET_KEY_FILE` → env hex → default keystore.)
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style

@@ -64,13 +64,43 @@ Recommended first path:
 6. `run` — start tiny, watch logs plus `GET /status`.
 7. `flatten` — cancel and close manually if you need to clean up.
 
+## Trading from your own wallet (recommended)
+
+For real usage, trade with a **delegate key** rather than your main wallet key:
+
+1. Sign in at [app.bullet.xyz](https://app.bullet.xyz) (or
+   [app.testnet.bullet.xyz](https://app.testnet.bullet.xyz)) with your wallet
+   (e.g. Phantom). This creates the embedded wallet that is your Bullet trading
+   account.
+2. Deposit collateral through the webapp UI — this initializes the trading
+   account.
+3. Create a delegate (see Bullet's
+   [delegate setup guide](https://docs.bullet.xyz/bulletx-exchange/how-to-guide/delegate-account-setup)),
+   then copy the delegate signer private key into `.env` as
+   `BB_BULLET_PRIVATE_KEY`. Base58 (Phantom / delegation export), hex, and
+   Solana JSON keystores (`BB_BULLET_KEY_FILE`) are all accepted.
+4. For Hyperliquid, create an API wallet at
+   [app.hyperliquid.xyz/API](https://app.hyperliquid.xyz/API) and copy its key
+   into `.env` as `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
+
+> **What is a delegate / API wallet?** A separate keypair authorized to trade on
+> behalf of your account. It can place and cancel orders but **cannot deposit or
+> withdraw**, and you can revoke it from the webapp at any time — so you trade
+> without exposing your main wallet's private key. The bot resolves the
+> delegate to its master account automatically; all balances and positions live
+> on the master account.
+
+Copy `.env.example` to `.env` (gitignored) to get started.
+
 ## Key management
 
 Private keys are passed via environment variables or keystore files, not copied
 into example configs. Two options:
 
 - **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.json"` under `[exchanges.bullet]`.
-- **Hex key:** set `BB_BULLET_PRIVATE_KEY_HEX` / `BB_HYPERLIQUID_PRIVATE_KEY_HEX`, e.g. via a `.env` file (already gitignored).
+- **Key string:** set `BB_BULLET_PRIVATE_KEY` (base58 or hex) /
+  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`, e.g. via a `.env` file (already gitignored).
+  `BB_BULLET_PRIVATE_KEY_HEX` still works as an alias.
 
 ## Strategies
 
