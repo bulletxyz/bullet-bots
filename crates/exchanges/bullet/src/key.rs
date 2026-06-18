@@ -49,7 +49,7 @@ mod tests {
         let want = Keypair::from_bytes(seed).address();
         let pubkey = Keypair::from_bytes(seed).public_key(); // 32 bytes
 
-        let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+        let hex = "07".repeat(32);
         assert_eq!(keypair_from_secret(&hex).expect("hex").address(), want);
         assert_eq!(keypair_from_secret(&format!("0x{hex}")).expect("0x hex").address(), want);
 
