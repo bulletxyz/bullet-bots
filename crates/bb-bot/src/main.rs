@@ -565,8 +565,8 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 /// Build a [`BulletConfig`] for standalone commands (`flatten` / `observe`)
 /// that don't load a TOML config. Resolves key material the same way as
 /// `connect_bullet` / `load_deposit_keypair`: `BB_BULLET_KEY_FILE` env wins,
-/// else the default `~/.config/bullet/id.json` keystore if it exists, with
-/// `BB_BULLET_PRIVATE_KEY` (preferred) or `BB_BULLET_PRIVATE_KEY_HEX` (fallback) as an alternative.
+/// else `BB_BULLET_PRIVATE_KEY` (preferred) or `BB_BULLET_PRIVATE_KEY_HEX` (fallback),
+/// else the default `~/.config/bullet/id.json` keystore if it exists.
 /// This lets a user who ran `bb-bot keygen` (which writes the default keystore) use these commands
 /// with no extra env setup. `connect_bullet` enforces that at least one source
 /// yields usable key material.
