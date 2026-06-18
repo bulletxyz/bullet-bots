@@ -1,0 +1,22 @@
+docs/superpowers/specs/2026-06-18-base58-delegate-signers-design.md
+  s_14b07560542dd9::t_69fd0c8d0d61b1 45-61
+  s_14b07560542dd9::t_212020ba334f66 1-44,62-162,175-176,183-210
+  s_14b07560542dd9::t_3ae8d56597ea10 211-218
+  s_14b07560542dd9::t_e57ae6974780e8 163-174,177-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "c734de2c2e10f229bc00ce16624b41a8429bb4cb",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
