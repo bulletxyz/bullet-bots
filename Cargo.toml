@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 axum = "0.8"
+bs58 = "0.5"
 
 # Internal crates
 bb-core = { path = "crates/bb-core" }

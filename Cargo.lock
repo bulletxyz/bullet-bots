@@ -385,6 +385,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bb-core",
+ "bs58",
  "bullet-rust-sdk",
  "rust_decimal",
  "secrecy",
