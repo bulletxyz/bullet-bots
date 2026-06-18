@@ -81,27 +81,39 @@ For real usage, trade with a **delegate key** rather than your main wallet key:
    accepted. Alternatively, if you have a Solana JSON keystore **file**, set
    `BB_BULLET_KEY_FILE` to its path instead (it takes precedence).
 4. For Hyperliquid, create an API wallet at
-   [app.hyperliquid.xyz/API](https://app.hyperliquid.xyz/API) and copy its key
-   into `.env` as `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
+   [app.hyperliquid.xyz/API](https://app.hyperliquid.xyz/API). Set
+   `BB_HYPERLIQUID_PRIVATE_KEY_HEX` to the **API-wallet key**, and
+   `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your **main account address** (the
+   `0x…` address shown in the HL UI). The API wallet signs orders; positions,
+   balances, and fills are read from the main account. (If you instead use your
+   main wallet's own key, leave `BB_HYPERLIQUID_ACCOUNT_ADDRESS` unset.)
 
 > **What is a delegate / API wallet?** A separate keypair authorized to trade on
 > behalf of your account. It can place and cancel orders but **cannot deposit or
 > withdraw**, and you can revoke it from the webapp at any time — so you trade
-> without exposing your main wallet's private key. The bot resolves the
-> delegate to its master account automatically; all balances and positions live
-> on the master account.
+> without exposing your main wallet's private key. On both venues the bot signs
+> with this key but reads account state from the **main account** — Bullet
+> resolves the master automatically via `delegateOf`; on Hyperliquid you supply
+> it via `BB_HYPERLIQUID_ACCOUNT_ADDRESS`.
 
-Copy `.env.example` to `.env` (gitignored) to get started.
+These are environment variables — the bot does **not** auto-load a `.env` file.
+Either `export` them in your shell, or load `.env.example` (copied to `.env`)
+yourself before running, e.g. `set -a && source .env && set +a`. For Bullet, a
+keystore **file** (`BB_BULLET_KEY_FILE`) avoids putting the key in the
+environment at all and is preferred.
 
 ## Key management
 
 Private keys are passed via environment variables or keystore files, not copied
 into example configs. Two options:
 
-- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.json"` under `[exchanges.bullet]`.
-- **Key string:** set `BB_BULLET_PRIVATE_KEY` (base58 or hex) /
-  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`, e.g. via a `.env` file (already gitignored).
-  `BB_BULLET_PRIVATE_KEY_HEX` still works as an alias.
+- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.json"` under `[exchanges.bullet]`. Keeps the key on disk instead of in the environment.
+- **Key string (env):** set `BB_BULLET_PRIVATE_KEY` (base58 or hex) /
+  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`. `BB_BULLET_PRIVATE_KEY_HEX` still works as an
+  alias. The bot reads process environment variables — it does not auto-load
+  `.env`, so export them (or `set -a && source .env && set +a`) before running.
+  When the Hyperliquid key is an API wallet, also set
+  `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your main account address.
 
 ## Strategies
 

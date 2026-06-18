@@ -294,6 +294,13 @@ the full walkthrough including reconnect patterns and the `Trade` /
 `InfoClient::with_reconnect` handles reconnection. Symbol mapping: Bullet
 `"BTC-USD"` ↔ HL `"BTC"`. `ActiveAssetCtx` provides real funding rates;
 `AllMids` remains a mark-price fallback when no funding field is present.
+**API/agent wallets**: set `account_address` (env `BB_HYPERLIQUID_ACCOUNT_ADDRESS`)
+to the master account. The agent key signs (orders are attributed to the master
+on-chain, `vault_address: None` per the SDK's `approve_agent` pattern); reads
+(`user_state` / `open_orders` / `user_fills`) and the `UserFills` / `OrderUpdates`
+subscriptions use `account_address`. Unset → reads default to the signer's own
+address (main-wallet-key case). HL has no on-chain delegate lookup, so unlike
+Bullet the master must be given explicitly.
 
 ## Config Format
 
@@ -313,7 +320,10 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
   **delegate** key, the adapter resolves it to its master account (via the
   `delegateOf` endpoint) for all reads and the user-orders subscription;
   signing uses the delegate key directly. File-based keystore is preferred —
-  see `bb-bot keygen`. Hyperliquid keys via `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.
+  see `bb-bot keygen`. Hyperliquid keys via `BB_HYPERLIQUID_PRIVATE_KEY_HEX`,
+  plus `BB_HYPERLIQUID_ACCOUNT_ADDRESS` (or `account_address` in config) for the
+  master account when using an API/agent wallet. Env vars are read from the
+  process environment; the bot does not auto-load `.env`.
   (Standalone `deposit`/`flatten`/`observe` take no config, so there env is
   the source: `BB_BULLET_KEY_FILE` → env hex → default keystore.)
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.

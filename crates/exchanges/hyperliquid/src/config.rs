@@ -16,6 +16,18 @@ pub struct HyperliquidConfig {
     /// Can be overridden via environment variable.
     #[serde(default = "default_secret")]
     pub private_key_hex: SecretString,
+
+    /// Master/main account address (`0x`-prefixed H160 hex) to read positions,
+    /// balances, and fills from, and to subscribe to.
+    ///
+    /// Set this when `private_key_hex` is an **API / agent wallet** key: the
+    /// agent signs orders (the exchange attributes them to the master account
+    /// on-chain), but all account state lives on the master account, not the
+    /// agent address. Leave unset when the key *is* the main wallet — reads
+    /// then default to the wallet's own address. Env:
+    /// `BB_HYPERLIQUID_ACCOUNT_ADDRESS`.
+    #[serde(default)]
+    pub account_address: Option<String>,
 }
 
 fn default_secret() -> SecretString {
@@ -35,6 +47,7 @@ mod tests {
         let cfg = HyperliquidConfig {
             network: "testnet".into(),
             private_key_hex: SecretString::new(FAKE_KEY.to_string()),
+            account_address: None,
         };
         let dbg = format!("{cfg:?}");
         assert!(!dbg.contains(FAKE_KEY), "Debug output must not contain key: {dbg}");
@@ -57,5 +70,19 @@ mod tests {
     fn missing_key_defaults_to_empty() {
         let cfg: HyperliquidConfig = toml::from_str(r#"network = "testnet""#).expect("parse");
         assert_eq!(cfg.private_key_hex.expose_secret(), "");
+        assert!(cfg.account_address.is_none());
+    }
+
+    #[test]
+    fn deserializes_account_address() {
+        let toml_src = r#"
+            network = "testnet"
+            account_address = "0x1111111111111111111111111111111111111111"
+        "#;
+        let cfg: HyperliquidConfig = toml::from_str(toml_src).expect("parse");
+        assert_eq!(
+            cfg.account_address.as_deref(),
+            Some("0x1111111111111111111111111111111111111111")
+        );
     }
 }

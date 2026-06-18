@@ -21,6 +21,7 @@ use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
 use bb_core::health::ConnectionHealth;
 use ethers::signers::{LocalWallet, Signer};
+use ethers::types::H160;
 use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
 use tokio::sync::mpsc;
 
@@ -56,7 +57,11 @@ pub async fn connect(
     let key_hex = raw_key.strip_prefix("0x").unwrap_or(raw_key.as_str());
     let wallet: LocalWallet =
         key_hex.parse().map_err(|e| BotError::config(format!("Invalid HL private key: {e}")))?;
-    let address = wallet.address();
+    let signer_address = wallet.address();
+    // Reads/subscriptions target the master account; for an API/agent wallet
+    // that's `account_address`, otherwise the signer's own address. Signing
+    // always uses `wallet`.
+    let address = resolve_account_address(config.account_address.as_deref(), signer_address)?;
     let base_url = match config.network.as_str() {
         "mainnet" => BaseUrl::Mainnet,
         "testnet" => BaseUrl::Testnet,
@@ -94,7 +99,13 @@ pub async fn connect(
             .await
             .map_err(|e| BotError::exchange(format!("HL subscribe {label}: {e}"), false))?;
     }
-    tracing::info!(symbol, coin = %coin, address = %format!("{address:?}"), "Hyperliquid: subscribed");
+    tracing::info!(
+        symbol,
+        coin = %coin,
+        signer = %format!("{signer_address:?}"),
+        account = %format!("{address:?}"),
+        "Hyperliquid: subscribed"
+    );
 
     let (trade_tx, trade_rx) = mpsc::unbounded_channel::<Trade>();
     let (book_tx, book_rx) = mpsc::channel::<BookUpdate>(BOOK_CHANNEL_CAPACITY);
@@ -244,4 +255,46 @@ async fn muxer_loop(
         }
     }
     tracing::warn!("Hyperliquid: WS muxer ended");
+}
+
+/// Address used for reads and subscriptions: the configured master
+/// `account_address` when set (API/agent-wallet case), otherwise the signer's
+/// own address. Signing always uses the wallet, not this address.
+fn resolve_account_address(configured: Option<&str>, signer: H160) -> Result<H160, BotError> {
+    match configured.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(addr) => addr.parse::<H160>().map_err(|e| {
+            BotError::config(format!("Invalid hyperliquid account_address '{addr}': {e}"))
+        }),
+        None => Ok(signer),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ethers::types::H160;
+
+    use super::resolve_account_address;
+
+    #[test]
+    fn unset_falls_back_to_signer() {
+        let signer = H160::repeat_byte(0xAB);
+        assert_eq!(resolve_account_address(None, signer).expect("none"), signer);
+        // Empty / whitespace is treated as unset.
+        assert_eq!(resolve_account_address(Some("  "), signer).expect("blank"), signer);
+    }
+
+    #[test]
+    fn set_uses_configured_master() {
+        let signer = H160::repeat_byte(0xAB);
+        let master = "0x1111111111111111111111111111111111111111";
+        let got = resolve_account_address(Some(master), signer).expect("master");
+        assert_eq!(got, master.parse::<H160>().expect("parse master"));
+        assert_ne!(got, signer);
+    }
+
+    #[test]
+    fn invalid_master_errors() {
+        let signer = H160::repeat_byte(0xAB);
+        assert!(resolve_account_address(Some("not-an-address"), signer).is_err());
+    }
 }

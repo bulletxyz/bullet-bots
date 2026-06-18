@@ -168,10 +168,21 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         }
     }
     if let Some(hl) = config.exchanges.get_mut("hyperliquid")
-        && let Ok(key) = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY_HEX")
         && let Some(table) = hl.config.as_table_mut()
     {
-        table.insert("private_key_hex".to_string(), toml::Value::String(key));
+        // Config wins; env only fills a field left unset or empty.
+        if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Some(key) =
+                std::env::var("BB_HYPERLIQUID_PRIVATE_KEY_HEX").ok().filter(|v| !v.is_empty())
+        {
+            table.insert("private_key_hex".to_string(), toml::Value::String(key));
+        }
+        if table.get("account_address").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Some(addr) =
+                std::env::var("BB_HYPERLIQUID_ACCOUNT_ADDRESS").ok().filter(|v| !v.is_empty())
+        {
+            table.insert("account_address".to_string(), toml::Value::String(addr));
+        }
     }
 
     Ok(config)
