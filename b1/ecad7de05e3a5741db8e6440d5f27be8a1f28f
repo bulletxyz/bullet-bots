@@ -1,0 +1,26 @@
+crates/exchanges/bullet/src/lib.rs
+  s_14b07560542dd9::t_4fb7ea4d03564a 5
+crates/exchanges/bullet/src/delegate.rs
+  s_14b07560542dd9::t_62913b11c174b2 1-49
+  s_14b07560542dd9::t_e5f6658fa13720 50-71
+Cargo.toml
+  s_14b07560542dd9::t_e6e0e7bd764c9a 29
+crates/exchanges/bullet/Cargo.toml
+  s_14b07560542dd9::t_b2871c30e1a625 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "b1ecad7de05e3a5741db8e6440d5f27be8a1f28f",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
