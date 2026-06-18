@@ -1,0 +1,22 @@
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_7da4716311499f 568
+  s_14b07560542dd9::t_91f8f9f39a63b0 528-529,569-571
+crates/exchanges/bullet/src/config.rs
+  s_14b07560542dd9::t_91f8f9f39a63b0 17-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "a582adb041ff94cc0341cda556da2dd4c25f8b00",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
