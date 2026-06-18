@@ -159,9 +159,11 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         }
         if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
             && table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY")
-                .or_else(|_| std::env::var("BB_BULLET_PRIVATE_KEY_HEX"))
+            && let Some(key) = bullet_key_from_env()
         {
+            // Drop any empty `private_key_hex` placeholder: it and the inserted
+            // `private_key` alias map to the same field, and serde rejects both.
+            table.remove("private_key_hex");
             table.insert("private_key".to_string(), toml::Value::String(key));
         }
     }
@@ -532,9 +534,7 @@ fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
         return Keypair::read_from_file(&path)
             .map_err(|e| format!("Failed to load keystore {path}: {e}").into());
     }
-    if let Ok(secret) = std::env::var("BB_BULLET_PRIVATE_KEY")
-        .or_else(|_| std::env::var("BB_BULLET_PRIVATE_KEY_HEX"))
-    {
+    if let Some(secret) = bullet_key_from_env() {
         return bb_exchange_bullet::key::keypair_from_secret(&secret).map_err(Into::into);
     }
     let default = default_key_path();
@@ -543,9 +543,20 @@ fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
             format!("Failed to load default keystore {}: {e}", default.display()).into()
         });
     }
-    Err("No key material — set BB_BULLET_KEY_FILE, BB_BULLET_PRIVATE_KEY_HEX, \
+    Err("No key material — set BB_BULLET_KEY_FILE, BB_BULLET_PRIVATE_KEY, \
          or run `bb-bot keygen` to create a default keystore"
         .into())
+}
+
+/// Read the Bullet signer key from the environment, preferring
+/// `BB_BULLET_PRIVATE_KEY` over the `BB_BULLET_PRIVATE_KEY_HEX` alias. An empty
+/// value is treated as absent, so a blank canonical var doesn't shadow a set
+/// alias (or trigger a "no key material" error when a key is actually present).
+fn bullet_key_from_env() -> Option<String> {
+    fn nonempty(name: &str) -> Option<String> {
+        std::env::var(name).ok().filter(|v| !v.is_empty())
+    }
+    nonempty("BB_BULLET_PRIVATE_KEY").or_else(|| nonempty("BB_BULLET_PRIVATE_KEY_HEX"))
 }
 
 /// Parse a network name into a [`Network`], accepting only `"mainnet"` /
@@ -573,9 +584,7 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;
 
-    let private_key_hex = std::env::var("BB_BULLET_PRIVATE_KEY")
-        .or_else(|_| std::env::var("BB_BULLET_PRIVATE_KEY_HEX"))
-        .unwrap_or_default();
+    let private_key_hex = bullet_key_from_env().unwrap_or_default();
     let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
         // Only fall back to the default keystore when no hex key was supplied,
         // matching `load_deposit_keypair`'s precedence (env key_file → env hex →

@@ -76,9 +76,10 @@ For real usage, trade with a **delegate key** rather than your main wallet key:
    account.
 3. Create a delegate (see Bullet's
    [delegate setup guide](https://docs.bullet.xyz/bulletx-exchange/how-to-guide/delegate-account-setup)),
-   then copy the delegate signer private key into `.env` as
-   `BB_BULLET_PRIVATE_KEY`. Base58 (Phantom / delegation export), hex, and
-   Solana JSON keystores (`BB_BULLET_KEY_FILE`) are all accepted.
+   then put the delegate signer key in `.env`. Set `BB_BULLET_PRIVATE_KEY` to the
+   key **string** — base58 (Phantom / delegation export) or hex are both
+   accepted. Alternatively, if you have a Solana JSON keystore **file**, set
+   `BB_BULLET_KEY_FILE` to its path instead (it takes precedence).
 4. For Hyperliquid, create an API wallet at
    [app.hyperliquid.xyz/API](https://app.hyperliquid.xyz/API) and copy its key
    into `.env` as `BB_HYPERLIQUID_PRIVATE_KEY_HEX`.

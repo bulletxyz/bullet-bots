@@ -45,7 +45,9 @@ fn account_address_from(signer: &str, status: u16, body: &str) -> Result<String,
         }
         404 => Ok(signer.to_string()),
         other => {
-            Err(BotError::exchange(format!("delegateOf returned HTTP {other}: {body}"), false))
+            // 5xx and 429 are transient (server/rate-limit); other 4xx are not.
+            let retryable = other >= 500 || other == 429;
+            Err(BotError::exchange(format!("delegateOf returned HTTP {other}: {body}"), retryable))
         }
     }
 }
@@ -68,7 +70,16 @@ mod tests {
     }
 
     #[test]
-    fn server_error_is_error() {
-        assert!(account_address_from("X", 500, "boom").is_err());
+    fn server_error_is_retryable() {
+        let err = account_address_from("X", 500, "boom").expect_err("500");
+        assert!(err.is_retryable(), "5xx should be retryable");
+        let err = account_address_from("X", 429, "slow down").expect_err("429");
+        assert!(err.is_retryable(), "429 should be retryable");
+    }
+
+    #[test]
+    fn client_error_is_not_retryable() {
+        let err = account_address_from("X", 400, "bad").expect_err("400");
+        assert!(!err.is_retryable(), "4xx (non-429) should not be retryable");
     }
 }
