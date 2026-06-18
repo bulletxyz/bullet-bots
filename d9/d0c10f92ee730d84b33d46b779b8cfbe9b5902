@@ -1,0 +1,25 @@
+AGENTS.md
+  s_14b07560542dd9::t_ffab7a1b3e85d1 310-318
+.env.example
+  s_14b07560542dd9::t_183dca61b01af6 1-15
+README.md
+  s_14b07560542dd9::t_5c02d89d30130d 67-94,101-103
+docs/CONTRIBUTING-EXCHANGES.md
+  s_14b07560542dd9::t_d596fbe6977003 87-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "d9d0c10f92ee730d84b33d46b779b8cfbe9b5902",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
