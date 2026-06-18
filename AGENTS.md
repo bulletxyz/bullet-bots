@@ -55,12 +55,12 @@ Run a bot (default: reads `~/.config/bullet/id.json`):
 cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
 ```
 
-Or point at an explicit keystore / use hex for CI:
+Or point at an explicit keystore / pass a key string for CI:
 
 ```sh
 export BB_BULLET_KEY_FILE="/path/to/keystore.json"   # preferred
-# OR
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."             # fallback
+# OR (base58 from Phantom/delegation export, or hex)
+export BB_BULLET_PRIVATE_KEY="<base58-or-hex>"        # fallback
 ```
 
 ## Architecture — the harness, feeds, and actors
