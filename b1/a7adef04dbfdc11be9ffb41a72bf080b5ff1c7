@@ -1,0 +1,22 @@
+Cargo.toml
+  s_fcfe4e64b4f250::t_fd3aba94928d3c 46
+crates/exchanges/bullet/src/broker.rs
+  s_fcfe4e64b4f250::t_dd61788ed9a82f 18
+  s_fcfe4e64b4f250::t_544f83f6d64aa6 75-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "b1a7adef04dbfdc11be9ffb41a72bf080b5ff1c7",
+  "prompts": {},
+  "sessions": {
+    "s_fcfe4e64b4f250": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da14761a-62b5-4f8d-bc41-70afac3de8a9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
