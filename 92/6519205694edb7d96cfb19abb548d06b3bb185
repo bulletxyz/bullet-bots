@@ -1,0 +1,37 @@
+crates/exchanges/hyperliquid/src/connection.rs
+  s_14b07560542dd9::t_fe85b379822756 24
+  s_14b07560542dd9::t_94d71d0f72081e 60-64
+  s_14b07560542dd9::t_1fc4e2b35d2e0e 259-300
+  s_14b07560542dd9::t_ee9d285ab68c0b 102-108
+README.md
+  s_14b07560542dd9::t_0d60b1252be790 110-116
+  s_14b07560542dd9::t_ba0affc5425423 84-89,94-97,99-103
+.env.example
+  s_14b07560542dd9::t_21e8a3084a5ce3 1-8,11-14,17-18,24-27
+AGENTS.md
+  s_14b07560542dd9::t_9d903744ca81c8 323-326
+  s_14b07560542dd9::t_4aa3e8a6fbe01c 297-303
+crates/exchanges/hyperliquid/src/config.rs
+  s_14b07560542dd9::t_78f51b534bb199 73-86
+  s_14b07560542dd9::t_b4c064f3f00793 19-30
+  s_14b07560542dd9::t_1afcfa7b045a7f 50
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_f3841c0b0ed941 173-174,177-180,183-185
+  s_14b07560542dd9::t_5ae1c078c5101e 175-176,181-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "926519205694edb7d96cfb19abb548d06b3bb185",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
