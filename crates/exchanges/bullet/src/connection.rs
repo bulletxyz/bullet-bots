@@ -123,19 +123,20 @@ pub async fn connect(
         .map_err(|e| BotError::exchange(e, true))?;
 
     let address = client.address().map_err(|e| BotError::exchange(e, false))?;
+    let account_address = crate::delegate::resolve_account_address(client.url(), &address).await?;
     let increments = load_increments(&client).await?;
     let client = Arc::new(client);
 
     // Set up WS + subscriptions.
     let ws = client.connect_ws_managed().call().await.map_err(|e| BotError::exchange(e, true))?;
     // Bullet user-order stream: address-prefixed topic (no listenKey flow).
-    let user_topic = Topic::user_orders(address.clone()).to_string();
+    let user_topic = Topic::user_orders(account_address.clone()).to_string();
     ws.subscribe(
         [
             Topic::depth(symbol, OrderbookDepth::D20),
             Topic::book_ticker(symbol),
             Topic::mark_price(symbol),
-            Topic::user_orders(address.clone()),
+            Topic::user_orders(account_address.clone()),
         ],
         None,
     )
@@ -143,7 +144,8 @@ pub async fn connect(
 
     tracing::info!(
         symbol,
-        address = %address,
+        signer = %address,
+        account = %account_address,
         user_topic,
         symbols_known = client.symbols().len(),
         "Bullet: connected + subscribed"
@@ -166,7 +168,7 @@ pub async fn connect(
     // stays alive for the lifetime of the task.
     tokio::spawn(muxer_loop(ws, trade_tx, book_tx, life_tx, mark_tx, Arc::clone(&health)));
 
-    let broker = BulletBroker::new(Arc::clone(&client), increments, health);
+    let broker = BulletBroker::new(Arc::clone(&client), account_address, increments, health);
     let feeds = BulletFeeds {
         trade: MpscFeed::new(trade_rx),
         book: MpscFeed::bounded(book_rx),
