@@ -525,7 +525,8 @@ fn set_keystore_permissions(_path: &std::path::Path) -> std::io::Result<()> {
 
 /// Resolve a Keypair for standalone (non-harness) commands like `deposit`,
 /// in the same preference order as `BulletConfig`: `BB_BULLET_KEY_FILE` wins,
-/// then `BB_BULLET_PRIVATE_KEY_HEX`, then the default path, else error.
+/// then `BB_BULLET_PRIVATE_KEY` (preferred) or `BB_BULLET_PRIVATE_KEY_HEX` (fallback), then the
+/// default path, else error.
 fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
     if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
         return Keypair::read_from_file(&path)
@@ -564,10 +565,10 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 /// Build a [`BulletConfig`] for standalone commands (`flatten` / `observe`)
 /// that don't load a TOML config. Resolves key material the same way as
 /// `connect_bullet` / `load_deposit_keypair`: `BB_BULLET_KEY_FILE` env wins,
-/// else the default `~/.config/bullet/id.json` keystore if it exists, with the
-/// `BB_BULLET_PRIVATE_KEY_HEX` env as a fallback. This lets a user who ran
-/// `bb-bot keygen` (which writes the default keystore) use these commands with
-/// no extra env setup. `connect_bullet` enforces that at least one source
+/// else the default `~/.config/bullet/id.json` keystore if it exists, with
+/// `BB_BULLET_PRIVATE_KEY` (preferred) or `BB_BULLET_PRIVATE_KEY_HEX` (fallback) as an alternative.
+/// This lets a user who ran `bb-bot keygen` (which writes the default keystore) use these commands
+/// with no extra env setup. `connect_bullet` enforces that at least one source
 /// yields usable key material.
 fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;

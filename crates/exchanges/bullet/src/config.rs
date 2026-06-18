@@ -14,10 +14,10 @@ use serde::Deserialize;
 ///    filesystem enforces, never hits the shell history, and isn't trivially exfiltrated via a
 ///    process environment dump.
 /// 2. **`BB_BULLET_KEY_FILE`** (env) — same keystore-file path, supplied via the environment.
-/// 3. **`private_key_hex`** (config) — Ed25519 secret as a hex string. Wrapped in [`SecretString`]
-///    so it's redacted in `Debug` output and zeroed on drop.
-/// 4. **`BB_BULLET_PRIVATE_KEY_HEX`** (env) — Ed25519 secret as a hex string, for CI / ephemeral
-///    contexts.
+/// 3. **`private_key`** (config, alias `private_key_hex`) — Ed25519 secret as a **hex or base58**
+///    string. Wrapped in [`SecretString`] so it's redacted in `Debug` output and zeroed on drop.
+/// 4. **`BB_BULLET_PRIVATE_KEY`** (env, alias `BB_BULLET_PRIVATE_KEY_HEX`) — Ed25519 secret as a
+///    hex or base58 string, for CI / ephemeral contexts.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BulletConfig {
     /// Network to connect to: "mainnet" or "testnet".
