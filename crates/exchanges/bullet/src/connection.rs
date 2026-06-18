@@ -88,15 +88,16 @@ pub async fn connect(
             BotError::config(format!("Failed to load keystore {}: {e}", path.display()))
         })?
     } else {
-        let hex = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
-        if hex.is_empty() {
+        let secret = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
+        if secret.is_empty() {
             return Err(BotError::config(
                 "Bullet: no key material — set [exchanges.bullet].key_file, \
-                 BB_BULLET_KEY_FILE, private_key_hex, or BB_BULLET_PRIVATE_KEY_HEX"
+                 BB_BULLET_KEY_FILE, private_key (or private_key_hex), or \
+                 BB_BULLET_PRIVATE_KEY (or BB_BULLET_PRIVATE_KEY_HEX)"
                     .to_string(),
             ));
         }
-        Keypair::from_hex(hex).map_err(|e| BotError::config(format!("Invalid private key: {e}")))?
+        crate::key::keypair_from_secret(secret)?
     };
     let network = match config.network.as_str() {
         "mainnet" => Network::Mainnet,

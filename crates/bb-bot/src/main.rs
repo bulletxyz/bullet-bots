@@ -158,9 +158,11 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
             table.insert("key_file".to_string(), toml::Value::String(path));
         }
         if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX")
+            && table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY")
+                .or_else(|_| std::env::var("BB_BULLET_PRIVATE_KEY_HEX"))
         {
-            table.insert("private_key_hex".to_string(), toml::Value::String(key));
+            table.insert("private_key".to_string(), toml::Value::String(key));
         }
     }
     if let Some(hl) = config.exchanges.get_mut("hyperliquid")
@@ -529,8 +531,10 @@ fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
         return Keypair::read_from_file(&path)
             .map_err(|e| format!("Failed to load keystore {path}: {e}").into());
     }
-    if let Ok(hex) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
-        return Keypair::from_hex(&hex).map_err(Into::into);
+    if let Ok(secret) = std::env::var("BB_BULLET_PRIVATE_KEY")
+        .or_else(|_| std::env::var("BB_BULLET_PRIVATE_KEY_HEX"))
+    {
+        return bb_exchange_bullet::key::keypair_from_secret(&secret).map_err(Into::into);
     }
     let default = default_key_path();
     if default.exists() {
@@ -568,7 +572,9 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;
 
-    let private_key_hex = std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default();
+    let private_key_hex = std::env::var("BB_BULLET_PRIVATE_KEY")
+        .or_else(|_| std::env::var("BB_BULLET_PRIVATE_KEY_HEX"))
+        .unwrap_or_default();
     let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
         // Only fall back to the default keystore when no hex key was supplied,
         // matching `load_deposit_keypair`'s precedence (env key_file → env hex →

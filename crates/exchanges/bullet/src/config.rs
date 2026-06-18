@@ -28,9 +28,10 @@ pub struct BulletConfig {
     #[serde(default)]
     pub key_file: Option<PathBuf>,
 
-    /// Ed25519 private key as hex string (with or without "0x" prefix).
+    /// Ed25519 private key as a hex **or base58** string (with or without "0x"
+    /// prefix for hex). Accepts the TOML key `private_key` or `private_key_hex`.
     /// Only used if `key_file` is not set.
-    #[serde(default = "default_secret")]
+    #[serde(default = "default_secret", alias = "private_key")]
     pub private_key_hex: SecretString,
 }
 
@@ -87,5 +88,17 @@ mod tests {
         let cfg: BulletConfig = toml::from_str(r#"network = "testnet""#).expect("parse");
         assert_eq!(cfg.private_key_hex.expose_secret(), "");
         assert!(cfg.key_file.is_none());
+    }
+
+    #[test]
+    fn deserializes_private_key_alias() {
+        let toml_src = format!(
+            r#"
+            network = "testnet"
+            private_key = "{FAKE_KEY}"
+        "#
+        );
+        let cfg: BulletConfig = toml::from_str(&toml_src).expect("parse");
+        assert_eq!(cfg.private_key_hex.expose_secret(), FAKE_KEY);
     }
 }
