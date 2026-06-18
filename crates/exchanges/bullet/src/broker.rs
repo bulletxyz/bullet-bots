@@ -15,6 +15,7 @@ use bb_core::types::{
     AmendOrder, Balance, CancelOrder, CancelResult, NewOrder, Order, OrderBook, OrderResult,
     OrderStatus, OrderType, Position, Side,
 };
+use bullet_rust_sdk::codegen::types::Filter;
 use bullet_rust_sdk::{
     AmendOrderArgs, CancelOrderArgs, Client, ClientOrderId, MarketId, NewOrderArgs, OrderId,
     OrderType as BulletOrderType, PositiveDecimal, Side as BulletSide,
@@ -71,22 +72,9 @@ pub(crate) async fn load_increments(
         let mut tick = None;
         let mut step = None;
         for f in &sym.filters {
-            let Some(kind) = f.get("filterType").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            match kind {
-                "PRICE_FILTER" => {
-                    tick = f
-                        .get("tickSize")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<Decimal>().ok());
-                }
-                "LOT_SIZE" => {
-                    step = f
-                        .get("stepSize")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<Decimal>().ok());
-                }
+            match f {
+                Filter::PriceFilter { tick_size, .. } => tick = Some(*tick_size),
+                Filter::LotSize { step_size, .. } => step = Some(*step_size),
                 _ => {}
             }
         }
