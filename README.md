@@ -76,13 +76,12 @@ For real usage, trade with a **delegate key** rather than your main wallet key:
    account.
 3. Create a delegate (see Bullet's
    [delegate setup guide](https://docs.bullet.xyz/bulletx-exchange/how-to-guide/delegate-account-setup)),
-   then put the delegate signer key in `.env`. Set `BB_BULLET_PRIVATE_KEY` to the
-   key **string** — base58 (Phantom / delegation export) or hex are both
-   accepted. Alternatively, if you have a Solana JSON keystore **file**, set
-   `BB_BULLET_KEY_FILE` to its path instead (it takes precedence).
+   then put the delegate signer key in `.env` as `BB_BULLET_PRIVATE_KEY` — the
+   **base58** string from the delegate UI (hex also works). Alternatively, save
+   that string to a file and point `BB_BULLET_KEY_FILE` at it (takes precedence).
 4. For Hyperliquid, create an API wallet at
    [app.hyperliquid.xyz/API](https://app.hyperliquid.xyz/API). Set
-   `BB_HYPERLIQUID_PRIVATE_KEY_HEX` to the **API-wallet key**, and
+   `BB_HYPERLIQUID_PRIVATE_KEY` to the **API-wallet key** (hex), and
    `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your **main account address** (the
    `0x…` address shown in the HL UI). The API wallet signs orders; positions,
    balances, and fills are read from the main account. (If you instead use your
@@ -99,21 +98,22 @@ For real usage, trade with a **delegate key** rather than your main wallet key:
 These are environment variables — the bot does **not** auto-load a `.env` file.
 Either `export` them in your shell, or load `.env.example` (copied to `.env`)
 yourself before running, e.g. `set -a && source .env && set +a`. For Bullet, a
-keystore **file** (`BB_BULLET_KEY_FILE`) avoids putting the key in the
-environment at all and is preferred.
+**key file** (`BB_BULLET_KEY_FILE`) avoids putting the key in the environment at
+all and is preferred.
 
 ## Key management
 
-Private keys are passed via environment variables or keystore files, not copied
-into example configs. Two options:
+Keys use each venue's native format: **base58 for Bullet** (what Phantom and the
+delegation UI export), **hex for Hyperliquid** (what the HL API page gives you).
+Pass them via environment variables or a key file — never in example configs.
 
-- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.json"` under `[exchanges.bullet]`. Keeps the key on disk instead of in the environment.
-- **Key string (env):** set `BB_BULLET_PRIVATE_KEY` (base58 or hex) /
-  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`. `BB_BULLET_PRIVATE_KEY_HEX` still works as an
-  alias. The bot reads process environment variables — it does not auto-load
-  `.env`, so export them (or `set -a && source .env && set +a`) before running.
-  When the Hyperliquid key is an API wallet, also set
-  `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your main account address.
+- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.key"` under `[exchanges.bullet]`. Keeps the key on disk instead of in the environment.
+- **Key string (env):** set `BB_BULLET_PRIVATE_KEY` (base58) and
+  `BB_HYPERLIQUID_PRIVATE_KEY` (hex). The bot reads process environment
+  variables — it does not auto-load `.env`, so export them (or
+  `set -a && source .env && set +a`) before running. When the Hyperliquid key is
+  an API wallet, also set `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your main account
+  address.
 
 ## Strategies
 

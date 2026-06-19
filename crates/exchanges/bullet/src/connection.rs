@@ -22,8 +22,7 @@ use bb_core::harness::MpscFeed;
 use bb_core::health::ConnectionHealth;
 use bullet_rust_sdk::ws::models::ServerMessage;
 use bullet_rust_sdk::{
-    Client, Keypair, ManagedWebsocket, Network, OrderbookDepth, Topic, UserActionDiscriminants,
-    WsEvent,
+    Client, ManagedWebsocket, Network, OrderbookDepth, Topic, UserActionDiscriminants, WsEvent,
 };
 use tokio::sync::mpsc;
 
@@ -84,16 +83,13 @@ pub async fn connect(
     symbol: &str,
 ) -> Result<(BulletBroker, BulletFeeds), BotError> {
     let keypair = if let Some(path) = config.key_file.as_deref() {
-        Keypair::read_from_file(path).map_err(|e| {
-            BotError::config(format!("Failed to load keystore {}: {e}", path.display()))
-        })?
+        crate::key::keypair_from_key_file(path)?
     } else {
-        let secret = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
+        let secret = secrecy::ExposeSecret::expose_secret(&config.private_key);
         if secret.is_empty() {
             return Err(BotError::config(
                 "Bullet: no key material — set [exchanges.bullet].key_file, \
-                 BB_BULLET_KEY_FILE, private_key (or private_key_hex), or \
-                 BB_BULLET_PRIVATE_KEY (or BB_BULLET_PRIVATE_KEY_HEX)"
+                 BB_BULLET_KEY_FILE, private_key, or BB_BULLET_PRIVATE_KEY"
                     .to_string(),
             ));
         }

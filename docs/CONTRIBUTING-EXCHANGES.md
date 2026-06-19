@@ -79,9 +79,9 @@ Adjust for venues that use a different suffix convention.
 
 ## Auth / key material
 
-- Never put private keys in configs. Read from env vars or a keystore file.
+- Never put private keys in configs. Read from env vars or a key file.
 - Wrap raw key strings in `secrecy::SecretString` in your config struct.
-- Use `secrecy::ExposeSecret::expose_secret(&config.private_key_hex)` only
+- Use `secrecy::ExposeSecret::expose_secret(&config.private_key)` only
   at the point of actual key use, not earlier.
 
 Bullet API docs are machine-readable: see

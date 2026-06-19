@@ -387,6 +387,7 @@ dependencies = [
  "bb-core",
  "bs58",
  "bullet-rust-sdk",
+ "getrandom 0.2.17",
  "reqwest 0.13.2",
  "rust_decimal",
  "secrecy",

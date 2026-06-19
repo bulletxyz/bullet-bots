@@ -1,7 +1,28 @@
 //! Parse an Ed25519 signer secret from hex or base58 into a `Keypair`.
 
+use std::path::Path;
+
 use bb_core::error::BotError;
 use bullet_rust_sdk::Keypair;
+
+/// Generate a new random signer, returning its **base58-encoded 32-byte secret**
+/// and its address. Base58 is the canonical Bullet key format (matches Phantom /
+/// delegation exports).
+pub fn generate_base58() -> Result<(String, String), BotError> {
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).map_err(|e| BotError::config(format!("RNG failure: {e}")))?;
+    let address = Keypair::from_bytes(seed).address();
+    Ok((bs58::encode(seed).into_string(), address))
+}
+
+/// Read a signer key from a file whose contents are a base58 or hex key string
+/// (as written by `bb-bot keygen`). Whitespace is trimmed.
+pub fn keypair_from_key_file(path: &Path) -> Result<Keypair, BotError> {
+    let contents = std::fs::read_to_string(path).map_err(|e| {
+        BotError::config(format!("Failed to read key file {}: {e}", path.display()))
+    })?;
+    keypair_from_secret(&contents)
+}
 
 /// Parse a Bullet signer secret into a [`Keypair`].
 ///

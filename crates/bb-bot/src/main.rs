@@ -59,7 +59,7 @@ enum Command {
     Keygen {
         #[arg(long, default_value = "testnet")]
         network: String,
-        /// Where to write the keystore. Defaults to `$HOME/.config/bullet/id.json`.
+        /// Where to write the key file. Defaults to `$HOME/.config/bullet/id.key`.
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -157,13 +157,9 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         {
             table.insert("key_file".to_string(), toml::Value::String(path));
         }
-        if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+        if table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
             && let Some(key) = bullet_key_from_env()
         {
-            // Drop any empty `private_key_hex` placeholder: it and the inserted
-            // `private_key` alias map to the same field, and serde rejects both.
-            table.remove("private_key_hex");
             table.insert("private_key".to_string(), toml::Value::String(key));
         }
     }
@@ -171,11 +167,11 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         && let Some(table) = hl.config.as_table_mut()
     {
         // Config wins; env only fills a field left unset or empty.
-        if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+        if table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
             && let Some(key) =
-                std::env::var("BB_HYPERLIQUID_PRIVATE_KEY_HEX").ok().filter(|v| !v.is_empty())
+                std::env::var("BB_HYPERLIQUID_PRIVATE_KEY").ok().filter(|v| !v.is_empty())
         {
-            table.insert("private_key_hex".to_string(), toml::Value::String(key));
+            table.insert("private_key".to_string(), toml::Value::String(key));
         }
         if table.get("account_address").and_then(toml::Value::as_str).is_none_or(str::is_empty)
             && let Some(addr) =
@@ -475,7 +471,7 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     let path = out.unwrap_or_else(default_key_path);
     if path.exists() {
         return Err(format!(
-            "Refusing to overwrite existing keystore at {}. \
+            "Refusing to overwrite existing key file at {}. \
              Use `--out <path>` to write elsewhere, or remove it first.",
             path.display()
         )
@@ -485,14 +481,13 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
         std::fs::create_dir_all(parent)?;
     }
 
-    let keypair = Keypair::generate();
-    let address = keypair.address();
-    keypair.write_to_file(&path)?;
+    let (secret_b58, address) = bb_exchange_bullet::key::generate_base58()?;
+    std::fs::write(&path, &secret_b58)?;
     set_keystore_permissions(&path)?;
 
     println!("Bullet {network} burner keypair");
     println!("  address:  {address}");
-    println!("  key_file: {}", path.display());
+    println!("  key_file: {} (base58 secret, 0600)", path.display());
     println!();
     println!("Configure bb-bot:");
     println!("  [exchanges.bullet]");
@@ -511,18 +506,18 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// `$HOME/.config/bullet/id.json`. Falls back to the current directory if
+/// `$HOME/.config/bullet/id.key`. Falls back to the current directory if
 /// `HOME` is unset (rare — CI sandboxes, some containers).
 fn default_key_path() -> PathBuf {
     match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join(".config/bullet/id.json"),
-        None => PathBuf::from("./bullet-id.json"),
+        Some(home) => PathBuf::from(home).join(".config/bullet/id.key"),
+        None => PathBuf::from("./bullet-id.key"),
     }
 }
 
-/// Set the keystore file to owner-read/write only (0600). On non-Unix
-/// platforms this is a no-op — Windows ACLs are left to the user's home
-/// directory permissions.
+/// Set the key file to owner-read/write only (0600). On non-Unix platforms
+/// this is a no-op — Windows ACLs are left to the user's home directory
+/// permissions.
 #[cfg(unix)]
 fn set_keystore_permissions(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -538,36 +533,29 @@ fn set_keystore_permissions(_path: &std::path::Path) -> std::io::Result<()> {
 
 /// Resolve a Keypair for standalone (non-harness) commands like `deposit`,
 /// in the same preference order as `BulletConfig`: `BB_BULLET_KEY_FILE` wins,
-/// then `BB_BULLET_PRIVATE_KEY` (preferred) or `BB_BULLET_PRIVATE_KEY_HEX` (fallback), then the
-/// default path, else error.
+/// then `BB_BULLET_PRIVATE_KEY`, then the default path, else error.
 fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
     if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
-        return Keypair::read_from_file(&path)
-            .map_err(|e| format!("Failed to load keystore {path}: {e}").into());
+        return bb_exchange_bullet::key::keypair_from_key_file(std::path::Path::new(&path))
+            .map_err(Into::into);
     }
     if let Some(secret) = bullet_key_from_env() {
         return bb_exchange_bullet::key::keypair_from_secret(&secret).map_err(Into::into);
     }
     let default = default_key_path();
     if default.exists() {
-        return Keypair::read_from_file(&default).map_err(|e| {
-            format!("Failed to load default keystore {}: {e}", default.display()).into()
-        });
+        return bb_exchange_bullet::key::keypair_from_key_file(&default).map_err(Into::into);
     }
     Err("No key material — set BB_BULLET_KEY_FILE, BB_BULLET_PRIVATE_KEY, \
-         or run `bb-bot keygen` to create a default keystore"
+         or run `bb-bot keygen` to create a default key file"
         .into())
 }
 
-/// Read the Bullet signer key from the environment, preferring
-/// `BB_BULLET_PRIVATE_KEY` over the `BB_BULLET_PRIVATE_KEY_HEX` alias. An empty
-/// value is treated as absent, so a blank canonical var doesn't shadow a set
-/// alias (or trigger a "no key material" error when a key is actually present).
+/// Read the Bullet signer key string from the environment (`BB_BULLET_PRIVATE_KEY`).
+/// An empty value is treated as absent, so a blank var doesn't shadow a key file
+/// or trigger a spurious "no key material" error.
 fn bullet_key_from_env() -> Option<String> {
-    fn nonempty(name: &str) -> Option<String> {
-        std::env::var(name).ok().filter(|v| !v.is_empty())
-    }
-    nonempty("BB_BULLET_PRIVATE_KEY").or_else(|| nonempty("BB_BULLET_PRIVATE_KEY_HEX"))
+    std::env::var("BB_BULLET_PRIVATE_KEY").ok().filter(|v| !v.is_empty())
 }
 
 /// Parse a network name into a [`Network`], accepting only `"mainnet"` /
@@ -587,27 +575,26 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 /// Build a [`BulletConfig`] for standalone commands (`flatten` / `observe`)
 /// that don't load a TOML config. Resolves key material the same way as
 /// `connect_bullet` / `load_deposit_keypair`: `BB_BULLET_KEY_FILE` env wins,
-/// else `BB_BULLET_PRIVATE_KEY` (preferred) or `BB_BULLET_PRIVATE_KEY_HEX` (fallback),
-/// else the default `~/.config/bullet/id.json` keystore if it exists.
-/// This lets a user who ran `bb-bot keygen` (which writes the default keystore) use these commands
-/// with no extra env setup. `connect_bullet` enforces that at least one source
-/// yields usable key material.
+/// else `BB_BULLET_PRIVATE_KEY`, else the default `~/.config/bullet/id.key`
+/// file if it exists. This lets a user who ran `bb-bot keygen` (which writes
+/// the default key file) use these commands with no extra env setup.
+/// `connect_bullet` enforces that at least one source yields usable key material.
 fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;
 
-    let private_key_hex = bullet_key_from_env().unwrap_or_default();
+    let private_key = bullet_key_from_env().unwrap_or_default();
     let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
-        // Only fall back to the default keystore when no hex key was supplied,
-        // matching `load_deposit_keypair`'s precedence (env key_file → env hex →
-        // default keystore) so flatten/observe/deposit pick the same account.
-        if private_key_hex.is_empty() {
+        // Only fall back to the default key file when no key string was supplied,
+        // matching `load_deposit_keypair`'s precedence (env key_file → env key →
+        // default key file) so flatten/observe/deposit pick the same account.
+        if private_key.is_empty() {
             let default = default_key_path();
             default.exists().then_some(default)
         } else {
             None
         }
     });
-    BulletConfig { network, key_file, private_key_hex: SecretString::new(private_key_hex) }
+    BulletConfig { network, key_file, private_key: SecretString::new(private_key) }
 }
 
 async fn deposit(

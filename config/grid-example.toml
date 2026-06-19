@@ -23,7 +23,7 @@ status_port = 3033  # must be unique per running bot — collides if two bots sh
 type = "bullet"
 network = "testnet"
 # Key material — do NOT put private keys in this file.
-# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
+# Option 1 (preferred): key_file = "/path/to/id.key"  (run `bb-bot keygen`)
 # Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY="..." (base58 or hex)
 
 [strategy]
