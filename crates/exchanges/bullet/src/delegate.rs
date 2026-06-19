@@ -51,21 +51,25 @@ pub async fn resolve_account_address(base_url: &str, signer: &str) -> Result<Str
 }
 
 /// Pure mapping from an HTTP response to an account address.
+///
+/// "Not a delegate" (i.e. the key is its own account) is reported by the API in
+/// two ways: the published API spec documents `404`, but the live mainnet/testnet
+/// servers return `400` with an `"is not a delegate"` message. Both mean self.
+/// Note `400` is also used for a malformed address (`"invalid address"`), which
+/// is a genuine error — so we key off the message, not the bare status.
 fn account_address_from(signer: &str, status: u16, body: &str) -> Result<String, BotError> {
-    match status {
-        200 => {
-            let parsed: DelegateOf = serde_json::from_str(body).map_err(|e| {
-                BotError::exchange(format!("delegateOf response parse error: {e}"), false)
-            })?;
-            Ok(parsed.parent)
-        }
-        404 => Ok(signer.to_string()),
-        other => {
-            // 5xx and 429 are transient (server/rate-limit); other 4xx are not.
-            let retryable = other >= 500 || other == 429;
-            Err(BotError::exchange(format!("delegateOf returned HTTP {other}: {body}"), retryable))
-        }
+    if status == 200 {
+        let parsed: DelegateOf = serde_json::from_str(body).map_err(|e| {
+            BotError::exchange(format!("delegateOf response parse error: {e}"), false)
+        })?;
+        return Ok(parsed.parent);
     }
+    if status == 404 || (status == 400 && body.contains("is not a delegate")) {
+        return Ok(signer.to_string());
+    }
+    // 5xx and 429 are transient (server/rate-limit); other statuses are not.
+    let retryable = status >= 500 || status == 429;
+    Err(BotError::exchange(format!("delegateOf returned HTTP {status}: {body}"), retryable))
 }
 
 #[cfg(test)]
@@ -81,7 +85,11 @@ mod tests {
 
     #[test]
     fn not_a_delegate_resolves_to_self() {
+        // Spec says 404; live mainnet/testnet return 400 "is not a delegate".
         let got = account_address_from("SELF_ADDR", 404, "{}").expect("404");
+        assert_eq!(got, "SELF_ADDR");
+        let body = r#"{"status":400,"message":"Bad request: SELF_ADDR is not a delegate"}"#;
+        let got = account_address_from("SELF_ADDR", 400, body).expect("400 not-a-delegate");
         assert_eq!(got, "SELF_ADDR");
     }
 
@@ -94,8 +102,11 @@ mod tests {
     }
 
     #[test]
-    fn client_error_is_not_retryable() {
-        let err = account_address_from("X", 400, "bad").expect_err("400");
+    fn malformed_address_400_is_error() {
+        // A 400 that is NOT "not a delegate" (e.g. invalid address) is a real
+        // error, not a resolve-to-self.
+        let body = r#"{"status":400,"message":"Bad request: invalid address: xyz"}"#;
+        let err = account_address_from("X", 400, body).expect_err("400 invalid");
         assert!(!err.is_retryable(), "4xx (non-429) should not be retryable");
     }
 }
