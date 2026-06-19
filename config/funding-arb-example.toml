@@ -7,14 +7,14 @@ status_port = 3031
 
 [exchanges.bullet]
 type = "bullet"
-network = "testnet"   # must match where your delegate is registered (mainnet = app.bullet.xyz)
+network = "testnet"   # match where your delegate was created: testnet (app.testnet.bullet.xyz) or mainnet (app.bullet.xyz)
 # Key material — do NOT put private keys in this file.
 # Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
 # Option 2: export BB_BULLET_PRIVATE_KEY="..."  (base58 from the delegate UI, or hex)
 
 [exchanges.hyperliquid]
 type = "hyperliquid"
-network = "testnet"   # must match where your account/API wallet lives (mainnet = app.hyperliquid.xyz)
+network = "testnet"   # match where your API wallet was created: testnet or mainnet (app.hyperliquid.xyz)
 # Key material — do NOT put private keys in this file.
 #   export BB_HYPERLIQUID_PRIVATE_KEY_HEX="0x..."   # API-wallet key (signs orders)
 #   export BB_HYPERLIQUID_ACCOUNT_ADDRESS="0x..."   # your MAIN account (reads
