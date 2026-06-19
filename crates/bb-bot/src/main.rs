@@ -38,6 +38,12 @@ use observer::ObserverActor;
 #[derive(Parser)]
 #[command(name = "bb-bot", about = "Bullet Bots trading system")]
 struct Cli {
+    /// Load environment variables from this file before running. Defaults to
+    /// `./.env` if present. Keys/account addresses are read from the
+    /// environment, so this is how a `.env` gets picked up.
+    #[arg(long, global = true)]
+    env_file: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -54,8 +60,8 @@ enum Command {
         #[arg(short, long)]
         config: String,
     },
-    /// Generate a burner Ed25519 keypair for Bullet and write it to a
-    /// Solana-compatible JSON keystore file.
+    /// Generate a burner Ed25519 keypair for Bullet and write its base58 secret
+    /// to a 0600 key file.
     Keygen {
         #[arg(long, default_value = "testnet")]
         network: String,
@@ -167,6 +173,11 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         && let Some(table) = hl.config.as_table_mut()
     {
         // Config wins; env only fills a field left unset or empty.
+        if table.get("key_file").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Ok(path) = std::env::var("BB_HYPERLIQUID_KEY_FILE")
+        {
+            table.insert("key_file".to_string(), toml::Value::String(path));
+        }
         if table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
             && let Some(key) =
                 std::env::var("BB_HYPERLIQUID_PRIVATE_KEY").ok().filter(|v| !v.is_empty())
@@ -748,6 +759,20 @@ async fn observe(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    // Load .env into the process environment before anything reads env vars.
+    // An explicit --env-file must exist; the default ./.env is optional. Real
+    // environment variables already set are never overridden.
+    match &cli.env_file {
+        Some(path) => {
+            dotenvy::from_path(path).map_err(|e| format!("--env-file {}: {e}", path.display()))?;
+            eprintln!("Loaded env from {}", path.display());
+        }
+        None => {
+            if let Ok(path) = dotenvy::dotenv() {
+                eprintln!("Loaded env from {}", path.display());
+            }
+        }
+    }
     match cli.command {
         Command::Keygen { network, out } => keygen(&network, out),
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,

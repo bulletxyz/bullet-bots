@@ -311,23 +311,21 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
   `status_bind = "host:port"` for explicit bind. `symbol` lives inside each
   `[strategy.<name>]` section so multi-symbol setups are explicit.
 - Exchange configs: `type = "<name>"` + adapter-specific fields. Keys use each
-  venue's native format: **base58 for Bullet**, **hex for Hyperliquid**. Bullet
-  resolves key material in this order (explicit config wins; env fills a
-  field the config omits, so an ambient env var can't silently switch
-  wallets): `key_file` (in config) → env `BB_BULLET_KEY_FILE` →
-  `private_key` (in config) → env `BB_BULLET_PRIVATE_KEY`. The key string is
-  base58 (Phantom / delegation export); hex is also accepted. A `key_file` is a
-  file containing that key string (as written by `bb-bot keygen`), not a JSON
-  keystore. If the signer is a **delegate** key, the adapter resolves it to its
-  master account (via the `delegateOf` endpoint) for all reads and the
-  user-orders subscription; signing uses the delegate key directly. File-based
-  key is preferred — see `bb-bot keygen`. Hyperliquid keys via
-  `BB_HYPERLIQUID_PRIVATE_KEY` (hex), plus `BB_HYPERLIQUID_ACCOUNT_ADDRESS` (or
-  `account_address` in config) for the master account when using an API/agent
-  wallet. Env vars are read from the process environment; the bot does not
-  auto-load `.env`. (Standalone `deposit`/`flatten`/`observe` take no config, so
-  there env is the source: `BB_BULLET_KEY_FILE` → `BB_BULLET_PRIVATE_KEY` →
-  default key file.)
+  venue's native format: **base58 for Bullet**, **hex for Hyperliquid** — paste
+  what the UI gives you. Both adapters resolve key material identically through
+  `bb_core::keys::resolve_key_string`, in this order (explicit config wins; env
+  fills a field the config omits, so an ambient env var can't silently switch
+  wallets): `key_file` (config) → env `BB_<VENUE>_KEY_FILE` → `private_key`
+  (config) → env `BB_<VENUE>_PRIVATE_KEY`. A `key_file` is a file containing the
+  key string (as written by `bb-bot keygen`), not a JSON keystore. If a Bullet
+  signer is a **delegate** key, the adapter resolves it to its master account
+  (via the `delegateOf` endpoint) for all reads and the user-orders
+  subscription; signing uses the delegate key directly. For Hyperliquid API/agent
+  wallets, set `BB_HYPERLIQUID_ACCOUNT_ADDRESS` (or `account_address` in config)
+  to the master account. `bb-bot` auto-loads `./.env` at startup (override with
+  `--env-file <path>`); already-set environment variables take precedence.
+  (Standalone `deposit`/`flatten`/`observe` take no config, so there env is the
+  source: `BB_BULLET_KEY_FILE` → `BB_BULLET_PRIVATE_KEY` → default key file.)
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style

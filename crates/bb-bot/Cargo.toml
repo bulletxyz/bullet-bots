@@ -30,5 +30,6 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
+dotenvy = { workspace = true }
 secrecy = { workspace = true }
 async-trait = { workspace = true }

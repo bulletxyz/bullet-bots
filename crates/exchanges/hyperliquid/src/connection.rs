@@ -53,7 +53,17 @@ pub async fn connect(
     config: &HyperliquidConfig,
     symbol: &str,
 ) -> Result<(HyperliquidBroker, HyperliquidFeeds), BotError> {
-    let raw_key = secrecy::ExposeSecret::expose_secret(&config.private_key);
+    let raw_key = bb_core::keys::resolve_key_string(
+        config.key_file.as_deref(),
+        secrecy::ExposeSecret::expose_secret(&config.private_key),
+    )?
+    .ok_or_else(|| {
+        BotError::config(
+            "Hyperliquid: no key material — set [exchanges.hyperliquid].key_file, \
+             BB_HYPERLIQUID_KEY_FILE, private_key, or BB_HYPERLIQUID_PRIVATE_KEY"
+                .to_string(),
+        )
+    })?;
     let key_hex = raw_key.strip_prefix("0x").unwrap_or(raw_key.as_str());
     let wallet: LocalWallet =
         key_hex.parse().map_err(|e| BotError::config(format!("Invalid HL private key: {e}")))?;

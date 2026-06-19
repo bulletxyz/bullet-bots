@@ -95,25 +95,25 @@ For real usage, trade with a **delegate key** rather than your main wallet key:
 > resolves the master automatically via `delegateOf`; on Hyperliquid you supply
 > it via `BB_HYPERLIQUID_ACCOUNT_ADDRESS`.
 
-These are environment variables — the bot does **not** auto-load a `.env` file.
-Either `export` them in your shell, or load `.env.example` (copied to `.env`)
-yourself before running, e.g. `set -a && source .env && set +a`. For Bullet, a
-**key file** (`BB_BULLET_KEY_FILE`) avoids putting the key in the environment at
-all and is preferred.
+Put these in `.env` — `bb-bot` auto-loads `./.env` at startup, so
+`cp .env.example .env`, fill it in, and run. (Use `--env-file <path>` to load a
+different file; real environment variables already set take precedence.)
 
 ## Key management
 
-Keys use each venue's native format: **base58 for Bullet** (what Phantom and the
-delegation UI export), **hex for Hyperliquid** (what the HL API page gives you).
-Pass them via environment variables or a key file — never in example configs.
+Keys use each venue's native format — **paste exactly what the UI gives you**:
+**base58 for Bullet** (Phantom / delegation export), **hex for Hyperliquid** (the
+HL API page). Never put them in `config/*.toml`.
 
-- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.key"` under `[exchanges.bullet]`. Keeps the key on disk instead of in the environment.
-- **Key string (env):** set `BB_BULLET_PRIVATE_KEY` (base58) and
-  `BB_HYPERLIQUID_PRIVATE_KEY` (hex). The bot reads process environment
-  variables — it does not auto-load `.env`, so export them (or
-  `set -a && source .env && set +a`) before running. When the Hyperliquid key is
-  an API wallet, also set `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your main account
-  address.
+- **Key string in `.env` (typical):** set `BB_BULLET_PRIVATE_KEY` (base58) and
+  `BB_HYPERLIQUID_PRIVATE_KEY` (hex); auto-loaded from `.env`. When the
+  Hyperliquid key is an API wallet, also set `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to
+  your main account address.
+- **Key file (keeps the secret off the environment):** for Bullet, generate one
+  with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` (or
+  `key_file` in `[exchanges.bullet]`). Both venues accept `key_file` /
+  `BB_<VENUE>_KEY_FILE` — a file containing the key string; it takes precedence
+  over the inline key.
 
 ## Strategies
 

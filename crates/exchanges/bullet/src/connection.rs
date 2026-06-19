@@ -82,19 +82,18 @@ pub async fn connect(
     config: &BulletConfig,
     symbol: &str,
 ) -> Result<(BulletBroker, BulletFeeds), BotError> {
-    let keypair = if let Some(path) = config.key_file.as_deref() {
-        crate::key::keypair_from_key_file(path)?
-    } else {
-        let secret = secrecy::ExposeSecret::expose_secret(&config.private_key);
-        if secret.is_empty() {
-            return Err(BotError::config(
-                "Bullet: no key material — set [exchanges.bullet].key_file, \
-                 BB_BULLET_KEY_FILE, private_key, or BB_BULLET_PRIVATE_KEY"
-                    .to_string(),
-            ));
-        }
-        crate::key::keypair_from_secret(secret)?
-    };
+    let secret = bb_core::keys::resolve_key_string(
+        config.key_file.as_deref(),
+        secrecy::ExposeSecret::expose_secret(&config.private_key),
+    )?
+    .ok_or_else(|| {
+        BotError::config(
+            "Bullet: no key material — set [exchanges.bullet].key_file, \
+             BB_BULLET_KEY_FILE, private_key, or BB_BULLET_PRIVATE_KEY"
+                .to_string(),
+        )
+    })?;
+    let keypair = crate::key::keypair_from_secret(&secret)?;
     let network = match config.network.as_str() {
         "mainnet" => Network::Mainnet,
         "testnet" => Network::Testnet,

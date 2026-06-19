@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use secrecy::SecretString;
 use serde::Deserialize;
 
@@ -11,6 +13,11 @@ use serde::Deserialize;
 pub struct HyperliquidConfig {
     /// Network to connect to: "mainnet" or "testnet".
     pub network: String,
+
+    /// Path to a file containing the key string (hex). Takes precedence over
+    /// `private_key` when set. Env: `BB_HYPERLIQUID_KEY_FILE`.
+    #[serde(default)]
+    pub key_file: Option<PathBuf>,
 
     /// Ethereum private key as hex string (secp256k1, with or without "0x" prefix).
     /// Can be overridden via environment variable.
@@ -46,6 +53,7 @@ mod tests {
     fn debug_redacts_private_key() {
         let cfg = HyperliquidConfig {
             network: "testnet".into(),
+            key_file: None,
             private_key: SecretString::new(FAKE_KEY.to_string()),
             account_address: None,
         };

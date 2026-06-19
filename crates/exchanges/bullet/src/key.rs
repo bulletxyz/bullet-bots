@@ -18,10 +18,7 @@ pub fn generate_base58() -> Result<(String, String), BotError> {
 /// Read a signer key from a file whose contents are a base58 or hex key string
 /// (as written by `bb-bot keygen`). Whitespace is trimmed.
 pub fn keypair_from_key_file(path: &Path) -> Result<Keypair, BotError> {
-    let contents = std::fs::read_to_string(path).map_err(|e| {
-        BotError::config(format!("Failed to read key file {}: {e}", path.display()))
-    })?;
-    keypair_from_secret(&contents)
+    keypair_from_secret(&bb_core::keys::read_key_file(path)?)
 }
 
 /// Parse a Bullet signer secret into a [`Keypair`].
