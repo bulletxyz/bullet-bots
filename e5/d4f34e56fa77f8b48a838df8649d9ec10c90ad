@@ -1,0 +1,22 @@
+crates/exchanges/bullet/src/delegate.rs
+  s_14b07560542dd9::t_7733e5372726eb 105-109
+  s_14b07560542dd9::t_5c34bdc77b2ee2 88,91-92
+  s_14b07560542dd9::t_3e4375dcebf734 54-55,57-59,61-68,70-72
+  s_14b07560542dd9::t_d1de54437ab835 56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "e5d4f34e56fa77f8b48a838df8649d9ec10c90ad",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
