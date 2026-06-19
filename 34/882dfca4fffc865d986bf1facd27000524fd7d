@@ -1,0 +1,49 @@
+README.md
+  s_14b07560542dd9::t_be0de6109d9f5a 98-100,104-116
+.env.example
+  s_14b07560542dd9::t_0f5f0e547ed81b 1-4,6-8,11-13,15-16,20,22-24,26-27
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_c3d1332f4bbe3d 63-64
+  s_14b07560542dd9::t_b5bcf2d1029c8f 762-766,768-775
+  s_14b07560542dd9::t_6aad2f9027816c 41-46
+  s_14b07560542dd9::t_3c89a1264696dd 767
+  s_14b07560542dd9::t_0adfb45414f401 176-180
+crates/bb-core/src/lib.rs
+  s_14b07560542dd9::t_57e586ee84240a 34
+AGENTS.md
+  s_14b07560542dd9::t_4d64ac6c5a4626 314-328
+crates/exchanges/hyperliquid/src/connection.rs
+  s_14b07560542dd9::t_1c52ccc193dc87 56-66
+crates/exchanges/bullet/src/key.rs
+  s_14b07560542dd9::t_13f72fc4efb7b5 21
+Cargo.lock
+  s_14b07560542dd9::t_7592dce1348c71 343,1337-1341
+crates/exchanges/hyperliquid/src/config.rs
+  s_14b07560542dd9::t_f5cc0d2d53716a 1-2,17-20
+  s_14b07560542dd9::t_b83bafe2658f71 56
+crates/bb-bot/Cargo.toml
+  s_14b07560542dd9::t_3fcd80367918be 33
+crates/exchanges/bullet/src/connection.rs
+  s_14b07560542dd9::t_5b17b151962f95 85-96
+crates/bb-core/src/keys.rs
+  s_14b07560542dd9::t_67cb38d543acc6 1-13,17-22,27-63
+  s_14b07560542dd9::t_3c89a1264696dd 14-16,23-26
+Cargo.toml
+  s_14b07560542dd9::t_eb8de76d4b2123 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "34882dfca4fffc865d986bf1facd27000524fd7d",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
