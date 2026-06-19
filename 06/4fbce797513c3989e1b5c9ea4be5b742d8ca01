@@ -1,0 +1,68 @@
+docs/CONTRIBUTING-EXCHANGES.md
+  s_14b07560542dd9::t_c0ffbb57f7694c 82,84
+.env.example
+  s_14b07560542dd9::t_22475a94ce231d 7,10-13,16-18,20-22
+crates/exchanges/bullet/src/config.rs
+  s_14b07560542dd9::t_81df16b65a562f 12-14,16-18
+  s_14b07560542dd9::t_fc39c67a8ef485 15,19,25-26,30-33,53,65,69,77,80-81,87
+crates/exchanges/hyperliquid/src/config.rs
+  s_14b07560542dd9::t_a9103aaa2df5cb 6,9,18,23,49,62,66,72
+crates/exchanges/bullet/src/connection.rs
+  s_14b07560542dd9::t_4747104df80851 86,88,92
+  s_14b07560542dd9::t_81df16b65a562f 25
+config/grid-example.toml
+  s_14b07560542dd9::t_a926db180f0301 26
+HACKING.md
+  s_14b07560542dd9::t_a926db180f0301 282
+  s_14b07560542dd9::t_0f25f0e5c78262 300
+  s_14b07560542dd9::t_2ec7b8cfa26601 283
+AGENTS.md
+  s_14b07560542dd9::t_3f30561f8617b0 313-314,318-330
+  s_14b07560542dd9::t_005c3d9efa29ca 38
+  s_14b07560542dd9::t_e5048447d0ea82 52,58,61
+crates/exchanges/bullet/src/key.rs
+  s_14b07560542dd9::t_854e08cb4a4236 3-4,8-20,24-25
+  s_14b07560542dd9::t_81df16b65a562f 21-23
+config/funding-arb-example.toml
+  s_14b07560542dd9::t_a926db180f0301 12,19
+crates/exchanges/hyperliquid/src/connection.rs
+  s_14b07560542dd9::t_421452af8087fd 56
+config/simple-mm-example.toml
+  s_14b07560542dd9::t_a926db180f0301 19
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_d39a561de5cc03 160,170,172,174
+  s_14b07560542dd9::t_bcf5c917cf949d 474
+  s_14b07560542dd9::t_9520bb60e09e75 518-520
+  s_14b07560542dd9::t_30917819e734e4 578-581,585,587-590,597
+  s_14b07560542dd9::t_396c5c65b7b619 484-485,490
+  s_14b07560542dd9::t_e42c6c1b1c176a 509,513-514
+  s_14b07560542dd9::t_caed285c4d63d6 536,539-540,547,550,554-556,558
+  s_14b07560542dd9::t_62888f7841474c 62
+Cargo.toml
+  s_14b07560542dd9::t_e1bfe59567b996 29
+config/avellaneda-stoikov-example.toml
+  s_14b07560542dd9::t_a926db180f0301 12
+README.md
+  s_14b07560542dd9::t_417caaf50c3882 79-81,84
+  s_14b07560542dd9::t_21572799092f60 101-102,106-116
+Cargo.lock
+  s_14b07560542dd9::t_400df94515084c 390
+crates/exchanges/bullet/Cargo.toml
+  s_14b07560542dd9::t_305f621b75330c 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "064fbce797513c3989e1b5c9ea4be5b742d8ca01",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
