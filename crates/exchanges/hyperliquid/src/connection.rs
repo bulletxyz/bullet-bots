@@ -62,6 +62,23 @@ pub async fn connect(
     // that's `account_address`, otherwise the signer's own address. Signing
     // always uses `wallet`.
     let address = resolve_account_address(config.account_address.as_deref(), signer_address)?;
+    if address == signer_address {
+        // No master configured. Fine for a main-wallet key, but it's also what
+        // an API/agent wallet looks like with account_address forgotten — and
+        // then positions/balances/fills come back empty. Surface a hint.
+        tracing::info!(
+            signer = %format!("{signer_address:?}"),
+            "Hyperliquid: no account_address set; reading account state from the signer's own \
+             address. If this key is an API/agent wallet, set BB_HYPERLIQUID_ACCOUNT_ADDRESS to \
+             your main account."
+        );
+    } else {
+        tracing::info!(
+            signer = %format!("{signer_address:?}"),
+            account = %format!("{address:?}"),
+            "Hyperliquid: signing with API/agent wallet, reading from master account"
+        );
+    }
     let base_url = match config.network.as_str() {
         "mainnet" => BaseUrl::Mainnet,
         "testnet" => BaseUrl::Testnet,
