@@ -31,7 +31,23 @@ pub async fn resolve_account_address(base_url: &str, signer: &str) -> Result<Str
         .text()
         .await
         .map_err(|e| BotError::exchange(format!("delegateOf body read failed: {e}"), true))?;
-    account_address_from(signer, status, &body)
+    let account = account_address_from(signer, status, &body)?;
+    if account == signer {
+        // Not a registered delegate on this network. Valid for a main-wallet
+        // key, but it's also what a delegate key looks like when the bot is
+        // pointed at the wrong network — surface a hint so the otherwise opaque
+        // "account not found" failures downstream are easier to diagnose.
+        tracing::info!(
+            signer,
+            base_url,
+            "Bullet: signer is not a registered delegate here; using it as its own account. \
+             If you meant to use a delegate key, check the network matches where it was \
+             registered."
+        );
+    } else {
+        tracing::info!(signer, master = %account, "Bullet: resolved delegate to master account");
+    }
+    Ok(account)
 }
 
 /// Pure mapping from an HTTP response to an account address.
