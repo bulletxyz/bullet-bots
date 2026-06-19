@@ -1,0 +1,20 @@
+config/funding-arb-example.toml
+  s_14b07560542dd9::t_296520dab6bd7f 10
+  s_14b07560542dd9::t_6110e4cce28b58 17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "8432e996eebc0f1c01e8d0745cbd0f871fe76bae",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
