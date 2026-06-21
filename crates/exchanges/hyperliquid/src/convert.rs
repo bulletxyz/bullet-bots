@@ -5,7 +5,7 @@ use bb_core::helpers::parse_decimal_or_warn;
 use bb_core::types::{Balance, Order, OrderBook, OrderStatus, OrderType, Position, Side};
 use hyperliquid_rust_sdk::{
     ActiveAssetCtxData, AssetCtx, L2BookData, L2SnapshotResponse, OrderUpdate, TradeInfo,
-    UserStateResponse,
+    UserStateResponse, UserTokenBalanceResponse,
 };
 use rust_decimal::Decimal;
 
@@ -49,6 +49,21 @@ pub fn user_state_to_balances(resp: &UserStateResponse) -> Vec<Balance> {
         available: parse_dec(&resp.withdrawable),
         total: parse_dec(&resp.margin_summary.account_value),
     }]
+}
+
+/// Balances from the spot clearinghouse — used for unified accounts, where the
+/// USDC collateral lives in the spot balance rather than the perp account.
+/// `available = total - hold` (hold = margin locked in open positions).
+pub fn spot_state_to_balances(resp: &UserTokenBalanceResponse) -> Vec<Balance> {
+    resp.balances
+        .iter()
+        .map(|b| {
+            let total = parse_dec(&b.total);
+            let hold = parse_dec(&b.hold);
+            Balance { asset: b.coin.clone(), available: total - hold, total }
+        })
+        .filter(|b| !b.total.is_zero())
+        .collect()
 }
 
 pub fn user_state_to_positions(resp: &UserStateResponse) -> Vec<Position> {
@@ -198,5 +213,31 @@ mod tests {
     fn parse_dec_handles_garbage() {
         assert_eq!(parse_dec("not_a_number"), Decimal::ZERO);
         assert_eq!(parse_dec("123.456"), Decimal::new(123_456, 3));
+    }
+
+    #[test]
+    fn spot_balances_use_total_minus_hold_and_drop_zero() {
+        use hyperliquid_rust_sdk::{UserTokenBalance, UserTokenBalanceResponse};
+        let resp = UserTokenBalanceResponse {
+            balances: vec![
+                UserTokenBalance {
+                    coin: "USDC".to_string(),
+                    hold: "2.04".to_string(),
+                    total: "997.59".to_string(),
+                    entry_ntl: "0.0".to_string(),
+                },
+                UserTokenBalance {
+                    coin: "TZERO".to_string(),
+                    hold: "0.0".to_string(),
+                    total: "0.0".to_string(),
+                    entry_ntl: "0.0".to_string(),
+                },
+            ],
+        };
+        let bals = spot_state_to_balances(&resp);
+        assert_eq!(bals.len(), 1, "zero-total balances dropped");
+        assert_eq!(bals[0].asset, "USDC");
+        assert_eq!(bals[0].total, Decimal::new(99759, 2));
+        assert_eq!(bals[0].available, Decimal::new(99555, 2)); // 997.59 - 2.04
     }
 }

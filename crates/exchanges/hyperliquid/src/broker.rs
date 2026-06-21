@@ -63,6 +63,9 @@ pub struct HyperliquidBroker {
     exchange: ExchangeClient,
     info: InfoClient,
     address: H160,
+    /// Unified account: collateral lives in the spot balance, so `get_balances`
+    /// reads `user_token_balances` rather than the perp clearinghouse.
+    unified: bool,
     health: Arc<ConnectionHealth>,
     client_ids: ClientIdMap,
 }
@@ -72,10 +75,11 @@ impl HyperliquidBroker {
         exchange: ExchangeClient,
         info: InfoClient,
         address: H160,
+        unified: bool,
         health: Arc<ConnectionHealth>,
         client_ids: ClientIdMap,
     ) -> Self {
-        Self { exchange, info, address, health, client_ids }
+        Self { exchange, info, address, unified, health, client_ids }
     }
 }
 
@@ -100,6 +104,16 @@ impl Broker for HyperliquidBroker {
     }
 
     async fn get_balances(&self) -> Result<Vec<Balance>, BotError> {
+        // Unified account: collateral is in the spot balance, not the perp
+        // clearinghouse (whose accountValue is only per-position margin).
+        if self.unified {
+            let spot = self
+                .info
+                .user_token_balances(self.address)
+                .await
+                .map_err(|e| BotError::exchange(e, true))?;
+            return Ok(convert::spot_state_to_balances(&spot));
+        }
         let state =
             self.info.user_state(self.address).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(convert::user_state_to_balances(&state))
