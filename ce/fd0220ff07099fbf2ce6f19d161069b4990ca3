@@ -1,0 +1,31 @@
+crates/exchanges/hyperliquid/src/broker.rs
+  s_14b07560542dd9::t_77620d4c029b97 107-116
+  s_14b07560542dd9::t_6aed84f99f81dd 66-68,78,82
+crates/exchanges/hyperliquid/src/convert.rs
+  s_14b07560542dd9::t_420743729674cb 54-68
+  s_14b07560542dd9::t_e2d7b98320508d 8
+  s_14b07560542dd9::t_d87fce2a8f9b94 217-242
+crates/exchanges/hyperliquid/src/connection.rs
+  s_14b07560542dd9::t_2d2164ce7b767d 127
+  s_14b07560542dd9::t_585af3d1dd92bc 162-163
+  s_14b07560542dd9::t_d1f34e658dd674 310-335
+  s_14b07560542dd9::t_e8b3566dc7abcb 376-383
+  s_14b07560542dd9::t_519681af5b5510 108-117
+  s_14b07560542dd9::t_820eeea1225ca6 287-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "cefd0220ff07099fbf2ce6f19d161069b4990ca3",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
