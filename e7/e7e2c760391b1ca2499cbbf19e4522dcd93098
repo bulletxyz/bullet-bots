@@ -1,0 +1,27 @@
+crates/exchanges/hyperliquid/src/convert.rs
+  s_14b07560542dd9::t_5216be44c6751e 234,236
+  s_14b07560542dd9::t_d61fd12f1ee584 21-33
+  s_14b07560542dd9::t_05c1d1adefc0af 232-233,235,237-240
+crates/strategies/funding-arb/src/strategy.rs
+  s_14b07560542dd9::t_31b1e1c01264c0 213
+  s_14b07560542dd9::t_161915a891e253 186-188,190,192-193,199-212,214-222
+crates/exchanges/hyperliquid/src/broker.rs
+  s_14b07560542dd9::t_8ec05e0c484448 325-327
+  s_14b07560542dd9::t_eedd5f5b24e0d8 172-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "e7e7e2c760391b1ca2499cbbf19e4522dcd93098",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
