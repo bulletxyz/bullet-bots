@@ -186,42 +186,66 @@ impl FundingArbActor {
             // At least one leg didn't land. Cancel resting orders AND close any
             // leg that actually filled — an aggressive (IoC) leg reporting
             // success has already executed, so cancelling alone would orphan it.
-            tracing::warn!(
-                "Entry incomplete — cancelling orders and flattening any filled leg, returning to Flat"
-            );
-            self.flatten_filled_leg(cx, &short_ex).await?;
-            self.flatten_filled_leg(cx, &long_ex).await?;
-            self.state.go_flat();
+            tracing::warn!("Entry incomplete — cancelling orders and flattening any filled leg");
+            let short_flat = self.flatten_filled_leg(cx, &short_ex).await?;
+            let long_flat = self.flatten_filled_leg(cx, &long_ex).await?;
+            if short_flat && long_flat {
+                self.state.go_flat();
+            } else {
+                // Don't pretend to be flat while a leg may still be open — that
+                // would let the strategy re-enter on top of an open position.
+                // Request shutdown so the operator sees it and can close manually.
+                tracing::error!(
+                    "Incomplete-entry cleanup unconfirmed — a leg may still be open. \
+                     MANUAL INTERVENTION REQUIRED; requesting shutdown."
+                );
+                cx.request_shutdown();
+            }
         }
         Ok(())
     }
 
-    /// Close whatever position `ex` actually holds for our symbol, reduce-only
-    /// at market. Reads the **live exchange position** (not internal inventory,
-    /// which lags the async fill event), so it catches a leg that filled while
-    /// the other leg of an entry failed. Cancels resting orders first.
-    async fn flatten_filled_leg(&mut self, cx: &ActorContext, ex: &str) -> Result<(), BotError> {
+    /// Close the position `ex` holds for our symbol, reduce-only at market.
+    /// Reads the **live exchange position** (not internal inventory, which lags
+    /// the async fill event), so it catches a leg that filled while the other
+    /// leg of an entry failed. Cancels resting orders first.
+    ///
+    /// Closes at most `order_size` so a larger pre-existing position on a shared
+    /// wallet (not created by us) isn't disturbed. Returns `true` if the leg is
+    /// believed flat (no position, or close accepted), `false` if cleanup
+    /// couldn't be confirmed (read or close failed) so the caller won't go Flat.
+    async fn flatten_filled_leg(&mut self, cx: &ActorContext, ex: &str) -> Result<bool, BotError> {
         let broker = cx.broker(ex)?;
         let _ = broker.cancel_all_orders(self.symbol()).await;
         let positions = match broker.get_positions().await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(exchange = %ex, error = %e, "Incomplete-entry cleanup: get_positions failed");
-                return Ok(());
+                return Ok(false);
             }
         };
         let Some(pos) = positions.iter().find(|p| p.symbol == self.symbol() && !p.size.is_zero())
         else {
-            return Ok(());
+            return Ok(true);
         };
         let close_side = if matches!(pos.side, Some(Side::Buy)) { Side::Sell } else { Side::Buy };
-        let qty = pos.size;
+        // Cap to what we tried to enter, so we don't close an external position.
+        let qty = pos.size.min(self.config.order_size);
         let mut order = self.make_order(ex, close_side, qty, true);
         order.order_type = OrderType::Market;
-        if let Err(e) = broker.place_orders(&[order]).await {
-            tracing::error!(exchange = %ex, error = %e, "Incomplete-entry: failed to flatten filled leg — MANUAL INTERVENTION MAY BE REQUIRED");
+        match broker.place_orders(&[order]).await {
+            Ok(results) if results.first().is_some_and(|r| r.success) => Ok(true),
+            Ok(results) => {
+                let err =
+                    results.first().and_then(|r| r.error.as_deref()).unwrap_or("order rejected");
+                tracing::error!(exchange = %ex, error = %err, "Incomplete-entry: flatten order rejected");
+                Ok(false)
+            }
+            Err(e) => {
+                tracing::error!(exchange = %ex, error = %e, "Incomplete-entry: flatten order failed");
+                Ok(false)
+            }
         }
-        Ok(())
     }
 
     async fn exit(&mut self, cx: &ActorContext) -> Result<(), BotError> {

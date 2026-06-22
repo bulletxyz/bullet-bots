@@ -24,7 +24,9 @@ pub fn resolve_key_string(
     key_file: Option<&Path>,
     inline: &str,
 ) -> Result<Option<String>, BotError> {
-    if let Some(path) = key_file {
+    // An empty key_file path (e.g. `BB_BULLET_KEY_FILE=` in .env) is treated as
+    // absent so it doesn't shadow the inline key.
+    if let Some(path) = key_file.filter(|p| !p.as_os_str().is_empty()) {
         return read_key_file(path).map(Some);
     }
     let trimmed = inline.trim();
@@ -59,5 +61,11 @@ mod tests {
     #[test]
     fn missing_file_errors() {
         assert!(read_key_file(Path::new("/nonexistent/bb/key")).is_err());
+    }
+
+    #[test]
+    fn empty_key_file_path_falls_back_to_inline() {
+        let got = resolve_key_string(Some(Path::new("")), "inlinekey").expect("resolve");
+        assert_eq!(got.as_deref(), Some("inlinekey"));
     }
 }

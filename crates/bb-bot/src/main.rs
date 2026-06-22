@@ -546,7 +546,7 @@ fn set_keystore_permissions(_path: &std::path::Path) -> std::io::Result<()> {
 /// in the same preference order as `BulletConfig`: `BB_BULLET_KEY_FILE` wins,
 /// then `BB_BULLET_PRIVATE_KEY`, then the default path, else error.
 fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
-    if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
+    if let Some(path) = std::env::var("BB_BULLET_KEY_FILE").ok().filter(|v| !v.is_empty()) {
         return bb_exchange_bullet::key::keypair_from_key_file(std::path::Path::new(&path))
             .map_err(Into::into);
     }
@@ -594,17 +594,20 @@ fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;
 
     let private_key = bullet_key_from_env().unwrap_or_default();
-    let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
-        // Only fall back to the default key file when no key string was supplied,
-        // matching `load_deposit_keypair`'s precedence (env key_file → env key →
-        // default key file) so flatten/observe/deposit pick the same account.
-        if private_key.is_empty() {
-            let default = default_key_path();
-            default.exists().then_some(default)
-        } else {
-            None
-        }
-    });
+    let key_file =
+        std::env::var("BB_BULLET_KEY_FILE").ok().filter(|v| !v.is_empty()).map(Into::into).or_else(
+            || {
+                // Only fall back to the default key file when no key string was supplied,
+                // matching `load_deposit_keypair`'s precedence (env key_file → env key →
+                // default key file) so flatten/observe/deposit pick the same account.
+                if private_key.is_empty() {
+                    let default = default_key_path();
+                    default.exists().then_some(default)
+                } else {
+                    None
+                }
+            },
+        );
     BulletConfig { network, key_file, private_key: SecretString::new(private_key) }
 }
 
@@ -661,10 +664,14 @@ async fn deposit(
 
 async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::error::Error>> {
     // Flatten every venue the bot trades, so a delta-neutral strategy's legs
-    // are both closed. Key material resolves via env (.env is auto-loaded).
+    // are both closed. Key material resolves via env (.env is auto-loaded). Each
+    // venue is skipped (not fatal) if its keys aren't configured — an HL-only
+    // user shouldn't be blocked by a missing Bullet key, and vice versa.
     let bullet_cfg = bullet_config_from_env(network.clone());
-    let (bullet, _feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
-    flatten_broker(&bullet, &symbol, "bullet").await?;
+    match bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await {
+        Ok((bullet, _feeds)) => flatten_broker(&bullet, &symbol, "bullet").await?,
+        Err(e) => println!("[bullet] skipping flatten — connect failed: {e}"),
+    }
 
     if let Some(hl_cfg) = hyperliquid_config_from_env(network) {
         match connect_hyperliquid(&hl_cfg, &symbol).await {
