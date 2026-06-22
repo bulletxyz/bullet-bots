@@ -1,0 +1,20 @@
+crates/exchanges/hyperliquid/src/broker.rs
+  s_14b07560542dd9::t_d1833dd854a2b9 524,526-531
+  s_14b07560542dd9::t_e7fbe182d792b4 57-66,69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "f4630e16b0c2f265e1e4292840aec16d856eabfe",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
