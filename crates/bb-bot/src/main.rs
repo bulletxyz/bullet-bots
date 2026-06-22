@@ -159,7 +159,7 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         // leaves empty. For a trading bot this avoids an ambient
         // BB_BULLET_KEY_FILE silently overriding the wallet set in config.
         if table.get("key_file").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && let Ok(path) = std::env::var("BB_BULLET_KEY_FILE")
+            && let Some(path) = std::env::var("BB_BULLET_KEY_FILE").ok().filter(|v| !v.is_empty())
         {
             table.insert("key_file".to_string(), toml::Value::String(path));
         }
@@ -174,7 +174,8 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     {
         // Config wins; env only fills a field left unset or empty.
         if table.get("key_file").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && let Ok(path) = std::env::var("BB_HYPERLIQUID_KEY_FILE")
+            && let Some(path) =
+                std::env::var("BB_HYPERLIQUID_KEY_FILE").ok().filter(|v| !v.is_empty())
         {
             table.insert("key_file".to_string(), toml::Value::String(path));
         }
