@@ -169,8 +169,11 @@ impl Broker for HyperliquidBroker {
                     OrderType::PostOnly => "Alo",
                     OrderType::Market => "Ioc",
                 };
-                let price_f64 = o.price.to_f64().ok_or_else(|| {
-                    BotError::strategy(format!("HL: cannot convert price {} to f64", o.price))
+                // HL rejects over-precise prices ("Order has invalid price"); snap
+                // to its 5-significant-figure rule before submitting.
+                let price = convert::hl_round_price(o.price);
+                let price_f64 = price.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!("HL: cannot convert price {price} to f64"))
                 })?;
                 let sz_f64 = o.quantity.to_f64().ok_or_else(|| {
                     BotError::strategy(format!("HL: cannot convert quantity {} to f64", o.quantity))
@@ -319,11 +322,9 @@ impl Broker for HyperliquidBroker {
                     OrderType::PostOnly => "Alo",
                     OrderType::Market => "Ioc",
                 };
-                let price_f64 = amend.new_order.price.to_f64().ok_or_else(|| {
-                    BotError::strategy(format!(
-                        "HL amend: cannot convert price {} to f64",
-                        amend.new_order.price
-                    ))
+                let price = convert::hl_round_price(amend.new_order.price);
+                let price_f64 = price.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!("HL amend: cannot convert price {price} to f64"))
                 })?;
                 let sz_f64 = amend.new_order.quantity.to_f64().ok_or_else(|| {
                     BotError::strategy(format!(

@@ -18,6 +18,19 @@ pub fn to_bb_symbol(hl_coin: &str) -> String {
     format!("{hl_coin}-USD")
 }
 
+/// Round an order price to Hyperliquid's precision rule: at most **5
+/// significant figures** for perps. HL rejects over-precise prices with
+/// "Order has invalid price" (e.g. `64710.599`, which is 6 sig figs). Rounding
+/// to 5 sig figs yields a valid on-tick price (`64711`). Integer prices are
+/// always valid, so large prices pass through unchanged.
+///
+/// Note: HL also caps decimals at `MAX_DECIMALS - szDecimals` (6 for perps),
+/// which only binds for sub-dollar assets; `round_sf(5)` already keeps decimals
+/// within that for any price ≳ $0.0001, covering the assets traded here.
+pub fn hl_round_price(price: Decimal) -> Decimal {
+    price.round_sf(5).unwrap_or(price).normalize()
+}
+
 /// Strip "-USD" suffix to get the HL coin name.
 pub fn to_hl_coin(bb_symbol: &str) -> String {
     bb_symbol.strip_suffix("-USD").unwrap_or(bb_symbol).to_string()
@@ -213,6 +226,16 @@ mod tests {
     fn parse_dec_handles_garbage() {
         assert_eq!(parse_dec("not_a_number"), Decimal::ZERO);
         assert_eq!(parse_dec("123.456"), Decimal::new(123_456, 3));
+    }
+
+    #[test]
+    fn hl_round_price_to_5_sig_figs() {
+        // 6 sig figs → rejected by HL; round to 5.
+        assert_eq!(hl_round_price(Decimal::new(64_710_599, 3)), Decimal::new(64711, 0)); // 64710.599 → 64711
+        // Sub-dollar keeps 5 sig figs of precision.
+        assert_eq!(hl_round_price(Decimal::new(123_456_789, 8)), Decimal::new(12346, 4)); // 1.23456789 → 1.2346
+        // Already ≤5 sig figs is unchanged.
+        assert_eq!(hl_round_price(Decimal::new(64711, 0)), Decimal::new(64711, 0));
     }
 
     #[test]

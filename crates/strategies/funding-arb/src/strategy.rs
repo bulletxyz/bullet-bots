@@ -183,14 +183,43 @@ impl FundingArbActor {
         }
 
         if !short_ok || !long_ok {
-            // At least one leg didn't land. Cancel any orders that may have
-            // been accepted on either venue to avoid leaving an unhedged leg.
-            let _ = cx.broker(&short_ex)?.cancel_all_orders(self.symbol()).await;
-            let _ = cx.broker(&long_ex)?.cancel_all_orders(self.symbol()).await;
+            // At least one leg didn't land. Cancel resting orders AND close any
+            // leg that actually filled — an aggressive (IoC) leg reporting
+            // success has already executed, so cancelling alone would orphan it.
             tracing::warn!(
-                "Entry incomplete — cancelling all orders on both venues, returning to Flat"
+                "Entry incomplete — cancelling orders and flattening any filled leg, returning to Flat"
             );
+            self.flatten_filled_leg(cx, &short_ex).await?;
+            self.flatten_filled_leg(cx, &long_ex).await?;
             self.state.go_flat();
+        }
+        Ok(())
+    }
+
+    /// Close whatever position `ex` actually holds for our symbol, reduce-only
+    /// at market. Reads the **live exchange position** (not internal inventory,
+    /// which lags the async fill event), so it catches a leg that filled while
+    /// the other leg of an entry failed. Cancels resting orders first.
+    async fn flatten_filled_leg(&mut self, cx: &ActorContext, ex: &str) -> Result<(), BotError> {
+        let broker = cx.broker(ex)?;
+        let _ = broker.cancel_all_orders(self.symbol()).await;
+        let positions = match broker.get_positions().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(exchange = %ex, error = %e, "Incomplete-entry cleanup: get_positions failed");
+                return Ok(());
+            }
+        };
+        let Some(pos) = positions.iter().find(|p| p.symbol == self.symbol() && !p.size.is_zero())
+        else {
+            return Ok(());
+        };
+        let close_side = if matches!(pos.side, Some(Side::Buy)) { Side::Sell } else { Side::Buy };
+        let qty = pos.size;
+        let mut order = self.make_order(ex, close_side, qty, true);
+        order.order_type = OrderType::Market;
+        if let Err(e) = broker.place_orders(&[order]).await {
+            tracing::error!(exchange = %ex, error = %e, "Incomplete-entry: failed to flatten filled leg — MANUAL INTERVENTION MAY BE REQUIRED");
         }
         Ok(())
     }
