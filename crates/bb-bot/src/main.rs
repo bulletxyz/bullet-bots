@@ -508,7 +508,12 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     println!("  export BB_BULLET_KEY_FILE=\"{}\"", path.display());
     println!();
     println!("Fund via faucet:");
-    println!("  curl -X POST \"https://{faucet_host}/api/testnet/faucet?address={address}\"");
+    // The faucet host rejects requests without a browser User-Agent (returns
+    // "Forbidden"), so the printed command sets one.
+    println!(
+        "  curl -X POST -H \"User-Agent: Mozilla/5.0\" \
+         \"https://{faucet_host}/api/testnet/faucet?address={address}\""
+    );
     println!();
     println!(
         "Then initialize your trading account (the faucet funds the wallet, not the account):"
