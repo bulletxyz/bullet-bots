@@ -608,6 +608,27 @@ fn bullet_config_from_env(network: String) -> BulletConfig {
     BulletConfig { network, key_file, private_key: SecretString::new(private_key) }
 }
 
+/// Build a [`HyperliquidConfig`] from the environment for standalone commands
+/// (`flatten`). Returns `None` when no HL key material is set, so `flatten`
+/// skips the HL venue. `account_address` is the master for API-wallet keys.
+fn hyperliquid_config_from_env(network: String) -> Option<HyperliquidConfig> {
+    use secrecy::SecretString;
+
+    let private_key = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY").ok().filter(|v| !v.is_empty());
+    let key_file = std::env::var_os("BB_HYPERLIQUID_KEY_FILE").map(Into::into);
+    if private_key.is_none() && key_file.is_none() {
+        return None;
+    }
+    Some(HyperliquidConfig {
+        network,
+        key_file,
+        private_key: SecretString::new(private_key.unwrap_or_default()),
+        account_address: std::env::var("BB_HYPERLIQUID_ACCOUNT_ADDRESS")
+            .ok()
+            .filter(|v| !v.is_empty()),
+    })
+}
+
 async fn deposit(
     network: String,
     asset: String,
@@ -639,50 +660,56 @@ async fn deposit(
 }
 
 async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::error::Error>> {
+    // Flatten every venue the bot trades, so a delta-neutral strategy's legs
+    // are both closed. Key material resolves via env (.env is auto-loaded).
+    let bullet_cfg = bullet_config_from_env(network.clone());
+    let (bullet, _feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
+    flatten_broker(&bullet, &symbol, "bullet").await?;
+
+    if let Some(hl_cfg) = hyperliquid_config_from_env(network) {
+        match connect_hyperliquid(&hl_cfg, &symbol).await {
+            Ok((hl, _feeds)) => flatten_broker(&hl, &symbol, "hyperliquid").await?,
+            Err(e) => println!("[hyperliquid] skipping flatten — connect failed: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// Cancel resting orders and market-close any open position on `symbol` for one
+/// broker. Used by `flatten` for each configured venue.
+async fn flatten_broker<B: Broker>(
+    broker: &B,
+    symbol: &str,
+    venue: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     use bb_core::types::{NewOrder, OrderType, Side};
     const FLATTEN_SLIPPAGE_BPS: u64 = 100;
 
-    // Reuse the adapter's connect path to get a real Broker. We don't need the
-    // feeds — just a broker handle. Key material resolves via env or the
-    // default keystore written by `bb-bot keygen`.
-    let bullet_cfg = bullet_config_from_env(network);
-    let (broker, _feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
-
-    let _ = broker.cancel_all_orders(&symbol).await;
+    let _ = broker.cancel_all_orders(symbol).await;
     let positions = broker.get_positions().await?;
-    let position = positions.iter().find(|p| p.symbol == symbol);
-
-    let Some(pos) = position else {
-        println!("No position on {symbol}. Nothing to flatten.");
+    let Some(pos) = positions.iter().find(|p| p.symbol == symbol && !p.size.is_zero()) else {
+        println!("[{venue}] No position on {symbol}. Nothing to flatten.");
         return Ok(());
     };
-    if pos.size.is_zero() {
-        println!("Position on {symbol} is already flat.");
-        return Ok(());
-    }
 
-    // Bullet reports size with a Side indicator; convert to signed and close
-    // with an opposite-side market order of the same magnitude.
+    // Close with an opposite-side market order of the same magnitude.
     let (close_side, qty) = match pos.side {
         Some(Side::Buy) => (Side::Sell, pos.size),
         Some(Side::Sell) => (Side::Buy, pos.size),
         None => {
-            println!("Position size {} with no side — skipping.", pos.size);
+            println!("[{venue}] Position size {} with no side — skipping.", pos.size);
             return Ok(());
         }
     };
 
-    // Bullet's Market order is an IoC limit: needs a bounded worst-case price.
-    // Fetch a fresh book and set price = opposite_side × (1 ± 1%). The IoC
-    // ensures the actual fill is at top-of-book or better.
-    let book = broker.get_orderbook(&symbol, 5).await?;
+    // Market here is an IoC limit: needs a bounded worst-case price. Use the
+    // opposing top-of-book ± 1%; the IoC fills at top-of-book or better.
+    let book = broker.get_orderbook(symbol, 5).await?;
     let base = match close_side {
         Side::Buy => book.best_ask().map(|l| l.price),
         Side::Sell => book.best_bid().map(|l| l.price),
     }
     .ok_or("Orderbook has no opposing-side liquidity — cannot flatten")?;
-    // 1% worst-case price — generous for a manual utility command;
-    // the IoC ensures we actually fill at or better than top-of-book.
     let slip = Decimal::from(FLATTEN_SLIPPAGE_BPS) / Decimal::from(10_000);
     let ioc_price = match close_side {
         Side::Buy => base * (Decimal::ONE + slip),
@@ -690,11 +717,11 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
     };
 
     println!(
-        "Flattening {symbol}: current size={} side={:?} → IoC {:?} {} @ {ioc_price}",
-        pos.size, pos.side, close_side, qty
+        "[{venue}] Flattening {symbol}: size={} side={:?} → IoC {:?} {qty} @ {ioc_price}",
+        pos.size, pos.side, close_side
     );
     let order = NewOrder {
-        symbol: symbol.clone(),
+        symbol: symbol.to_string(),
         side: close_side,
         order_type: OrderType::Market,
         price: ioc_price,
@@ -705,9 +732,9 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
     let results = broker.place_orders(&[order]).await?;
     for r in &results {
         if r.success {
-            println!("Close order accepted: order_id={:?}", r.order_id);
+            println!("[{venue}] Close order accepted: order_id={:?}", r.order_id);
         } else {
-            println!("Close order FAILED: {:?}", r.error);
+            println!("[{venue}] Close order FAILED: {:?}", r.error);
         }
     }
     Ok(())
