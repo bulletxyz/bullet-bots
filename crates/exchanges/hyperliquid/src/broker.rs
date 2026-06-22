@@ -54,9 +54,19 @@ pub(crate) fn register_client_id(map: &ClientIdMap, client_id: &str) -> Uuid {
     cloid
 }
 
+/// Normalize a cloid string to the canonical `Uuid` form used as the map key.
+/// HL echoes cloids on fills/order-updates as `0x` + 32 hex (no hyphens), while
+/// we key the map by `Uuid::to_string()` (hyphenated). Without normalizing, a
+/// fill's cloid wouldn't match the stored key, so the strategy would discard
+/// its own fills as "external" and never update inventory.
+fn normalize_cloid(cloid: &str) -> String {
+    let hex = cloid.strip_prefix("0x").or_else(|| cloid.strip_prefix("0X")).unwrap_or(cloid);
+    Uuid::parse_str(hex).map_or_else(|_| cloid.to_string(), |u| u.to_string())
+}
+
 pub(crate) fn original_client_id(map: &ClientIdMap, cloid: &str) -> String {
     let guard = map.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.get(cloid).cloned().unwrap_or_else(|| cloid.to_string())
+    guard.get(&normalize_cloid(cloid)).cloned().unwrap_or_else(|| cloid.to_string())
 }
 
 pub struct HyperliquidBroker {
@@ -511,7 +521,14 @@ mod tests {
         let ids = new_client_id_map();
         let cloid = register_client_id(&ids, "42");
 
+        // Hyphenated Uuid form (how we store the key).
         assert_eq!(original_client_id(&ids, &cloid.to_string()), "42");
+        // HL wire form on fills: `0x` + 32 hex, no hyphens — must also resolve,
+        // else the strategy discards its own HL fills.
+        let hl_wire = format!("0x{}", cloid.simple());
+        assert_eq!(original_client_id(&ids, &hl_wire), "42");
+        // Bare 32-hex (no prefix) resolves too.
+        assert_eq!(original_client_id(&ids, &cloid.simple().to_string()), "42");
     }
 
     #[test]
