@@ -1,0 +1,26 @@
+crates/bb-core/src/keys.rs
+  s_14b07560542dd9::t_a7d0c6ba1b316c 65-70
+  s_14b07560542dd9::t_db4ffdb14aabe2 27-29
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_9c687ae13c1a1e 667-669,671-674
+  s_14b07560542dd9::t_9f8d024534cfb6 549
+  s_14b07560542dd9::t_f592171118ec80 597-610
+crates/strategies/funding-arb/src/strategy.rs
+  s_14b07560542dd9::t_e4f791d5fec68d 189-203,208-217,224,229,232-233,236-247
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "2dcaeeb3d11ef54c87f06f9d9afd067b5a1c7dae",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
