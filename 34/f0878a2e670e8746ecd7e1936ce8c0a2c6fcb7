@@ -1,0 +1,21 @@
+crates/bb-core/src/harness/harness.rs
+  s_14b07560542dd9::t_75eae6ef213399 131
+  s_14b07560542dd9::t_18d18ded8abfae 185-211
+  s_14b07560542dd9::t_5249a56ef6e808 153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "34f0878a2e670e8746ecd7e1936ce8c0a2c6fcb7",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
