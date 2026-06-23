@@ -341,6 +341,7 @@ dependencies = [
  "bullet-rust-sdk",
  "clap",
  "dotenvy",
+ "reqwest 0.13.2",
  "rust_decimal",
  "secrecy",
  "serde",

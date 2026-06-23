@@ -69,6 +69,12 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Fund the wallet from the testnet faucet (testnet only). Resolves the
+    /// address from the same key material as `deposit`.
+    Faucet {
+        #[arg(long, default_value = "testnet")]
+        network: String,
+    },
     /// Deposit funds from on-chain balance into the perp margin account.
     Deposit {
         #[arg(long, default_value = "testnet")]
@@ -508,10 +514,11 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     println!("  export BB_BULLET_KEY_FILE=\"{}\"", path.display());
     println!();
     println!("Fund via faucet:");
-    // The faucet host rejects requests without a browser User-Agent (returns
-    // "Forbidden"), so the printed command sets one.
+    println!("  cargo run --bin bb-bot -- faucet --network {network}");
+    // The faucet host rejects a plain curl (no browser User-Agent → "Forbidden"),
+    // so if you call it directly, set one:
     println!(
-        "  curl -X POST -H \"User-Agent: Mozilla/5.0\" \
+        "  # or: curl -X POST -H \"User-Agent: Mozilla/5.0\" \
          \"https://{faucet_host}/api/testnet/faucet?address={address}\""
     );
     println!();
@@ -636,6 +643,39 @@ fn hyperliquid_config_from_env(network: String) -> Option<HyperliquidConfig> {
             .ok()
             .filter(|v| !v.is_empty()),
     })
+}
+
+/// Fund the wallet from the testnet faucet. Resolves the address from the same
+/// key material as `deposit`, then calls the faucet endpoint directly (with a
+/// browser User-Agent, which the host requires — a plain `curl` is rejected
+/// with "Forbidden").
+async fn faucet(network: String) -> Result<(), Box<dyn std::error::Error>> {
+    if network != "testnet" {
+        return Err("Faucet is only available on testnet".into());
+    }
+    let address = load_deposit_keypair()?.address();
+    let url = format!("https://app.testnet.bullet.xyz/api/testnet/faucet?address={address}");
+    let resp = reqwest::Client::new().post(&url).header("User-Agent", "Mozilla/5.0").send().await?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // The faucet is Cloudflare-protected and rate-limited; a 403 usually
+        // means "already funded recently from this IP" or a bot challenge. The
+        // web faucet is the reliable fallback.
+        return Err(format!(
+            "Faucet request failed (HTTP {status}): {body}\n\
+             It may be rate-limited (already funded recently) or blocking automated \
+             requests. Use the web faucet instead: https://app.testnet.bullet.xyz \
+             (fund address {address})."
+        )
+        .into());
+    }
+    println!("Faucet funded {address}");
+    println!("  {body}");
+    println!(
+        "Next: cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000"
+    );
+    Ok(())
 }
 
 async fn deposit(
@@ -815,6 +855,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     match cli.command {
         Command::Keygen { network, out } => keygen(&network, out),
+        Command::Faucet { network } => faucet(network).await,
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,
         Command::Flatten { network, symbol } => flatten(network, symbol).await,
         Command::Observe { network, symbol, binance_symbol, binance_market, output } => {

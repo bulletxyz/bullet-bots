@@ -41,11 +41,10 @@ cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml   # no
 #    prints your address and the exact faucet command.
 cargo run --bin bb-bot -- keygen --network testnet
 
-# 2. Fund it from the faucet. keygen prints this with your address filled in.
-#    The browser User-Agent header is REQUIRED — without it the faucet returns
-#    "Forbidden".
-curl -X POST -H "User-Agent: Mozilla/5.0" \
-  "https://app.testnet.bullet.xyz/api/testnet/faucet?address=<YOUR_ADDRESS>"
+# 2. Fund it from the faucet.
+cargo run --bin bb-bot -- faucet --network testnet
+#    The faucet is rate-limited and Cloudflare-protected; if this 403s, use the
+#    web faucet at https://app.testnet.bullet.xyz and fund your printed address.
 
 # 3. Move funds into the perp margin account. This also initializes the trading
 #    account — without it, order placement fails with `user_variants not found`.
