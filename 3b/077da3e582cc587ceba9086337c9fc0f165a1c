@@ -1,0 +1,28 @@
+README.md
+  s_14b07560542dd9::t_37ae474cf56461 44-47
+crates/bb-bot/Cargo.toml
+  s_14b07560542dd9::t_f6db6decc33aab 34
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_2a9cf567725f79 658,675-677
+  s_14b07560542dd9::t_abdaaacabe2d43 662-671
+  s_14b07560542dd9::t_2654f857d586de 858
+  s_14b07560542dd9::t_4e52c77b0e8b1a 72-77
+  s_14b07560542dd9::t_b0db8960c2c527 517-519,521
+  s_14b07560542dd9::t_f29fde4970cc2c 648-657,659-661,672-674,678-680
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "3b077da3e582cc587ceba9086337c9fc0f165a1c",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
