@@ -18,7 +18,8 @@ struct DelegateOf {
 /// `base_url` is the REST base (e.g. `Client::url()`), `signer` the signer's
 /// own base58 address. Returns the master `parent` for a delegate key, or
 /// `signer` unchanged if it is not a delegate.
-pub async fn resolve_account_address(base_url: &str, signer: &str) -> Result<String, BotError> {
+/// One `delegateOf` attempt: HTTP GET + map the response to an account address.
+async fn resolve_account_once(base_url: &str, signer: &str) -> Result<String, BotError> {
     let url = format!("{}/api/v1/delegateOf", base_url.trim_end_matches('/'));
     let resp = reqwest::Client::new()
         .get(&url)
@@ -31,7 +32,24 @@ pub async fn resolve_account_address(base_url: &str, signer: &str) -> Result<Str
         .text()
         .await
         .map_err(|e| BotError::exchange(format!("delegateOf body read failed: {e}"), true))?;
-    let account = account_address_from(signer, status, &body)?;
+    account_address_from(signer, status, &body)
+}
+
+pub async fn resolve_account_address(base_url: &str, signer: &str) -> Result<String, BotError> {
+    // Retry transient failures (network / 5xx / 429) so a brief API blip at
+    // startup doesn't block a delegate key; non-retryable errors fail fast.
+    let mut attempt = 0;
+    let account = loop {
+        attempt += 1;
+        match resolve_account_once(base_url, signer).await {
+            Ok(a) => break a,
+            Err(e) if e.is_retryable() && attempt < 3 => {
+                tracing::warn!(attempt, error = %e, "delegateOf transient failure; retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    };
     if account == signer {
         // Not a registered delegate on this network. Valid for a main-wallet
         // key, but it's also what a delegate key looks like when the bot is

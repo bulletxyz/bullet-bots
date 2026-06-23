@@ -294,16 +294,37 @@ impl FundingArbActor {
         for ex in &exchanges {
             let broker = cx.broker(ex)?;
             let _ = broker.cancel_all_orders(self.symbol()).await;
-            let pos = self.net_position(ex);
-            if pos.is_zero() {
+            // Size from the LIVE exchange position, not internal inventory:
+            // inventory can lag a fill that landed within the shutdown window,
+            // which would otherwise be skipped here, leaving exposure on exit.
+            // (Consistent with the reconnect reconcile, which also reads live
+            // positions.) Capped to order_size so a larger pre-existing position
+            // on a shared wallet isn't disturbed.
+            let positions = match broker.get_positions().await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!(exchange = %ex, error = %e, "Emergency flatten: get_positions failed — MANUAL INTERVENTION REQUIRED");
+                    all_ok = false;
+                    continue;
+                }
+            };
+            let Some(pos) =
+                positions.iter().find(|p| p.symbol == self.symbol() && !p.size.is_zero())
+            else {
                 continue;
-            }
-            let (close_side, qty) =
-                if pos.is_sign_positive() { (Side::Sell, pos) } else { (Side::Buy, -pos) };
+            };
+            let close_side =
+                if matches!(pos.side, Some(Side::Buy)) { Side::Sell } else { Side::Buy };
+            let qty = pos.size.min(self.config.order_size);
             let mut order = self.make_order(ex, close_side, qty, true);
             order.order_type = OrderType::Market; // force IoC regardless of config
             match broker.place_orders(&[order]).await {
-                Ok(results) if results.first().is_some_and(|r| r.success) => {}
+                Ok(results) if results.first().is_some_and(|r| r.success) => {
+                    if pos.size > self.config.order_size {
+                        tracing::error!(exchange = %ex, live_size = %pos.size, closed = %qty, "Emergency flatten: remainder beyond order_size left — MANUAL INTERVENTION REQUIRED");
+                        all_ok = false;
+                    }
+                }
                 Ok(results) => {
                     let err = results
                         .first()
@@ -822,13 +843,15 @@ mod tests {
             .unwrap();
         let reason = harness.run().await.unwrap();
 
-        // Two place_orders on bullet: the entry, then the cleanup close.
-        assert_eq!(bullet.placed_count().await, 2, "entry + cleanup close");
+        // Entry, then the cleanup close — plus, since the leg wasn't confirmed
+        // flat, the shutdown path's emergency_flatten runs a second capped close.
+        // Every close is capped to order_size and reduce-only.
+        assert!(bullet.placed_count().await >= 2, "entry + at least one cleanup close");
         let close = bullet.last_placed_orders().await;
-        assert_eq!(close.len(), 1, "one cleanup close order");
+        assert_eq!(close.len(), 1, "one close order");
         assert_eq!(close[0].side, Side::Buy, "close is opposite the Sell fill");
         assert_eq!(close[0].quantity, d("1"), "capped to order_size, not the full 5");
-        assert!(close[0].reduce_only, "cleanup close is reduce-only");
+        assert!(close[0].reduce_only, "close is reduce-only");
         // Live size (5) exceeds order_size (1), so the capped close leaves a
         // remainder → the leg is NOT confirmed flat → the actor requests
         // shutdown rather than going Flat (which would allow re-entry on top).
