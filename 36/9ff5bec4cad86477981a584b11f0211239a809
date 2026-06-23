@@ -1,0 +1,28 @@
+crates/exchanges/hyperliquid/src/connection.rs
+  s_14b07560542dd9::t_b7d72486964008 314-316,319-327,330-335
+crates/bb-core/src/keys.rs
+  s_14b07560542dd9::t_696b8b3f845450 54
+  s_14b07560542dd9::t_18c69adadb968f 55-56
+crates/bb-bot/src/main.rs
+  s_14b07560542dd9::t_5a936f6d6a6a61 844-846
+  s_14b07560542dd9::t_d9ea24e88e4340 847-854
+  s_14b07560542dd9::t_49195d02ba7287 634-635
+crates/exchanges/hyperliquid/src/convert.rs
+  s_14b07560542dd9::t_2002412347ccd7 74-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "369ff5bec4cad86477981a584b11f0211239a809",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
