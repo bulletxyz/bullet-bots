@@ -7,3 +7,6 @@
 
 # Local/experimental configs — put personal configs here
 config/local/
+
+# Superpowers brainstorming/specs (local working docs)
+docs/superpowers/

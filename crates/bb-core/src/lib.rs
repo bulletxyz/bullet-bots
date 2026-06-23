@@ -31,6 +31,7 @@ pub mod events;
 pub mod harness;
 pub mod health;
 pub mod helpers;
+pub mod keys;
 pub mod types;
 
 /// Convenience re-exports for the most commonly used framework types.

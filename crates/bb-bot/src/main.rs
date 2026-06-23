@@ -38,6 +38,12 @@ use observer::ObserverActor;
 #[derive(Parser)]
 #[command(name = "bb-bot", about = "Bullet Bots trading system")]
 struct Cli {
+    /// Load environment variables from this file before running. Defaults to
+    /// `./.env` if present. Keys/account addresses are read from the
+    /// environment, so this is how a `.env` gets picked up.
+    #[arg(long, global = true)]
+    env_file: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -54,14 +60,20 @@ enum Command {
         #[arg(short, long)]
         config: String,
     },
-    /// Generate a burner Ed25519 keypair for Bullet and write it to a
-    /// Solana-compatible JSON keystore file.
+    /// Generate a burner Ed25519 keypair for Bullet and write its base58 secret
+    /// to a 0600 key file.
     Keygen {
         #[arg(long, default_value = "testnet")]
         network: String,
-        /// Where to write the keystore. Defaults to `$HOME/.config/bullet/id.json`.
+        /// Where to write the key file. Defaults to `$HOME/.config/bullet/id.key`.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Fund the wallet from the testnet faucet (testnet only). Resolves the
+    /// address from the same key material as `deposit`.
+    Faucet {
+        #[arg(long, default_value = "testnet")]
+        network: String,
     },
     /// Deposit funds from on-chain balance into the perp margin account.
     Deposit {
@@ -153,21 +165,38 @@ fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
         // leaves empty. For a trading bot this avoids an ambient
         // BB_BULLET_KEY_FILE silently overriding the wallet set in config.
         if table.get("key_file").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && let Ok(path) = std::env::var("BB_BULLET_KEY_FILE")
+            && let Some(path) = std::env::var("BB_BULLET_KEY_FILE").ok().filter(|v| !v.is_empty())
         {
             table.insert("key_file".to_string(), toml::Value::String(path));
         }
-        if table.get("private_key_hex").and_then(toml::Value::as_str).is_none_or(str::is_empty)
-            && let Ok(key) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX")
+        if table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Some(key) = bullet_key_from_env()
         {
-            table.insert("private_key_hex".to_string(), toml::Value::String(key));
+            table.insert("private_key".to_string(), toml::Value::String(key));
         }
     }
     if let Some(hl) = config.exchanges.get_mut("hyperliquid")
-        && let Ok(key) = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY_HEX")
         && let Some(table) = hl.config.as_table_mut()
     {
-        table.insert("private_key_hex".to_string(), toml::Value::String(key));
+        // Config wins; env only fills a field left unset or empty.
+        if table.get("key_file").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Some(path) =
+                std::env::var("BB_HYPERLIQUID_KEY_FILE").ok().filter(|v| !v.is_empty())
+        {
+            table.insert("key_file".to_string(), toml::Value::String(path));
+        }
+        if table.get("private_key").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Some(key) =
+                std::env::var("BB_HYPERLIQUID_PRIVATE_KEY").ok().filter(|v| !v.is_empty())
+        {
+            table.insert("private_key".to_string(), toml::Value::String(key));
+        }
+        if table.get("account_address").and_then(toml::Value::as_str).is_none_or(str::is_empty)
+            && let Some(addr) =
+                std::env::var("BB_HYPERLIQUID_ACCOUNT_ADDRESS").ok().filter(|v| !v.is_empty())
+        {
+            table.insert("account_address".to_string(), toml::Value::String(addr));
+        }
     }
 
     Ok(config)
@@ -460,7 +489,7 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     let path = out.unwrap_or_else(default_key_path);
     if path.exists() {
         return Err(format!(
-            "Refusing to overwrite existing keystore at {}. \
+            "Refusing to overwrite existing key file at {}. \
              Use `--out <path>` to write elsewhere, or remove it first.",
             path.display()
         )
@@ -470,14 +499,13 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
         std::fs::create_dir_all(parent)?;
     }
 
-    let keypair = Keypair::generate();
-    let address = keypair.address();
-    keypair.write_to_file(&path)?;
+    let (secret_b58, address) = bb_exchange_bullet::key::generate_base58()?;
+    std::fs::write(&path, &secret_b58)?;
     set_keystore_permissions(&path)?;
 
     println!("Bullet {network} burner keypair");
     println!("  address:  {address}");
-    println!("  key_file: {}", path.display());
+    println!("  key_file: {} (base58 secret, 0600)", path.display());
     println!();
     println!("Configure bb-bot:");
     println!("  [exchanges.bullet]");
@@ -486,7 +514,13 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     println!("  export BB_BULLET_KEY_FILE=\"{}\"", path.display());
     println!();
     println!("Fund via faucet:");
-    println!("  curl -X POST \"https://{faucet_host}/api/testnet/faucet?address={address}\"");
+    println!("  cargo run --bin bb-bot -- faucet --network {network}");
+    // The faucet host rejects a plain curl (no browser User-Agent → "Forbidden"),
+    // so if you call it directly, set one:
+    println!(
+        "  # or: curl -X POST -H \"User-Agent: Mozilla/5.0\" \
+         \"https://{faucet_host}/api/testnet/faucet?address={address}\""
+    );
     println!();
     println!(
         "Then initialize your trading account (the faucet funds the wallet, not the account):"
@@ -496,18 +530,18 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// `$HOME/.config/bullet/id.json`. Falls back to the current directory if
+/// `$HOME/.config/bullet/id.key`. Falls back to the current directory if
 /// `HOME` is unset (rare — CI sandboxes, some containers).
 fn default_key_path() -> PathBuf {
     match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join(".config/bullet/id.json"),
-        None => PathBuf::from("./bullet-id.json"),
+        Some(home) => PathBuf::from(home).join(".config/bullet/id.key"),
+        None => PathBuf::from("./bullet-id.key"),
     }
 }
 
-/// Set the keystore file to owner-read/write only (0600). On non-Unix
-/// platforms this is a no-op — Windows ACLs are left to the user's home
-/// directory permissions.
+/// Set the key file to owner-read/write only (0600). On non-Unix platforms
+/// this is a no-op — Windows ACLs are left to the user's home directory
+/// permissions.
 #[cfg(unix)]
 fn set_keystore_permissions(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -523,24 +557,29 @@ fn set_keystore_permissions(_path: &std::path::Path) -> std::io::Result<()> {
 
 /// Resolve a Keypair for standalone (non-harness) commands like `deposit`,
 /// in the same preference order as `BulletConfig`: `BB_BULLET_KEY_FILE` wins,
-/// then `BB_BULLET_PRIVATE_KEY_HEX`, then the default path, else error.
+/// then `BB_BULLET_PRIVATE_KEY`, then the default path, else error.
 fn load_deposit_keypair() -> Result<Keypair, Box<dyn std::error::Error>> {
-    if let Ok(path) = std::env::var("BB_BULLET_KEY_FILE") {
-        return Keypair::read_from_file(&path)
-            .map_err(|e| format!("Failed to load keystore {path}: {e}").into());
+    if let Some(path) = std::env::var("BB_BULLET_KEY_FILE").ok().filter(|v| !v.is_empty()) {
+        return bb_exchange_bullet::key::keypair_from_key_file(std::path::Path::new(&path))
+            .map_err(Into::into);
     }
-    if let Ok(hex) = std::env::var("BB_BULLET_PRIVATE_KEY_HEX") {
-        return Keypair::from_hex(&hex).map_err(Into::into);
+    if let Some(secret) = bullet_key_from_env() {
+        return bb_exchange_bullet::key::keypair_from_secret(&secret).map_err(Into::into);
     }
     let default = default_key_path();
     if default.exists() {
-        return Keypair::read_from_file(&default).map_err(|e| {
-            format!("Failed to load default keystore {}: {e}", default.display()).into()
-        });
+        return bb_exchange_bullet::key::keypair_from_key_file(&default).map_err(Into::into);
     }
-    Err("No key material — set BB_BULLET_KEY_FILE, BB_BULLET_PRIVATE_KEY_HEX, \
-         or run `bb-bot keygen` to create a default keystore"
+    Err("No key material — set BB_BULLET_KEY_FILE, BB_BULLET_PRIVATE_KEY, \
+         or run `bb-bot keygen` to create a default key file"
         .into())
+}
+
+/// Read the Bullet signer key string from the environment (`BB_BULLET_PRIVATE_KEY`).
+/// An empty value is treated as absent, so a blank var doesn't shadow a key file
+/// or trigger a spurious "no key material" error.
+fn bullet_key_from_env() -> Option<String> {
+    std::env::var("BB_BULLET_PRIVATE_KEY").ok().filter(|v| !v.is_empty())
 }
 
 /// Parse a network name into a [`Network`], accepting only `"mainnet"` /
@@ -560,27 +599,84 @@ fn parse_network(s: &str) -> Result<Network, bb_core::error::BotError> {
 /// Build a [`BulletConfig`] for standalone commands (`flatten` / `observe`)
 /// that don't load a TOML config. Resolves key material the same way as
 /// `connect_bullet` / `load_deposit_keypair`: `BB_BULLET_KEY_FILE` env wins,
-/// else the default `~/.config/bullet/id.json` keystore if it exists, with the
-/// `BB_BULLET_PRIVATE_KEY_HEX` env as a fallback. This lets a user who ran
-/// `bb-bot keygen` (which writes the default keystore) use these commands with
-/// no extra env setup. `connect_bullet` enforces that at least one source
-/// yields usable key material.
+/// else `BB_BULLET_PRIVATE_KEY`, else the default `~/.config/bullet/id.key`
+/// file if it exists. This lets a user who ran `bb-bot keygen` (which writes
+/// the default key file) use these commands with no extra env setup.
+/// `connect_bullet` enforces that at least one source yields usable key material.
 fn bullet_config_from_env(network: String) -> BulletConfig {
     use secrecy::SecretString;
 
-    let private_key_hex = std::env::var("BB_BULLET_PRIVATE_KEY_HEX").unwrap_or_default();
-    let key_file = std::env::var_os("BB_BULLET_KEY_FILE").map(Into::into).or_else(|| {
-        // Only fall back to the default keystore when no hex key was supplied,
-        // matching `load_deposit_keypair`'s precedence (env key_file → env hex →
-        // default keystore) so flatten/observe/deposit pick the same account.
-        if private_key_hex.is_empty() {
-            let default = default_key_path();
-            default.exists().then_some(default)
-        } else {
-            None
-        }
-    });
-    BulletConfig { network, key_file, private_key_hex: SecretString::new(private_key_hex) }
+    let private_key = bullet_key_from_env().unwrap_or_default();
+    let key_file =
+        std::env::var("BB_BULLET_KEY_FILE").ok().filter(|v| !v.is_empty()).map(Into::into).or_else(
+            || {
+                // Only fall back to the default key file when no key string was supplied,
+                // matching `load_deposit_keypair`'s precedence (env key_file → env key →
+                // default key file) so flatten/observe/deposit pick the same account.
+                if private_key.is_empty() {
+                    let default = default_key_path();
+                    default.exists().then_some(default)
+                } else {
+                    None
+                }
+            },
+        );
+    BulletConfig { network, key_file, private_key: SecretString::new(private_key) }
+}
+
+/// Build a [`HyperliquidConfig`] from the environment for standalone commands
+/// (`flatten`). Returns `None` when no HL key material is set, so `flatten`
+/// skips the HL venue. `account_address` is the master for API-wallet keys.
+fn hyperliquid_config_from_env(network: String) -> Option<HyperliquidConfig> {
+    use secrecy::SecretString;
+
+    let private_key = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY").ok().filter(|v| !v.is_empty());
+    let key_file =
+        std::env::var("BB_HYPERLIQUID_KEY_FILE").ok().filter(|v| !v.is_empty()).map(Into::into);
+    if private_key.is_none() && key_file.is_none() {
+        return None;
+    }
+    Some(HyperliquidConfig {
+        network,
+        key_file,
+        private_key: SecretString::new(private_key.unwrap_or_default()),
+        account_address: std::env::var("BB_HYPERLIQUID_ACCOUNT_ADDRESS")
+            .ok()
+            .filter(|v| !v.is_empty()),
+    })
+}
+
+/// Fund the wallet from the testnet faucet. Resolves the address from the same
+/// key material as `deposit`, then calls the faucet endpoint directly (with a
+/// browser User-Agent, which the host requires — a plain `curl` is rejected
+/// with "Forbidden").
+async fn faucet(network: String) -> Result<(), Box<dyn std::error::Error>> {
+    if network != "testnet" {
+        return Err("Faucet is only available on testnet".into());
+    }
+    let address = load_deposit_keypair()?.address();
+    let url = format!("https://app.testnet.bullet.xyz/api/testnet/faucet?address={address}");
+    let resp = reqwest::Client::new().post(&url).header("User-Agent", "Mozilla/5.0").send().await?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // The faucet is Cloudflare-protected and rate-limited; a 403 usually
+        // means "already funded recently from this IP" or a bot challenge. The
+        // web faucet is the reliable fallback.
+        return Err(format!(
+            "Faucet request failed (HTTP {status}): {body}\n\
+             It may be rate-limited (already funded recently) or blocking automated \
+             requests. Use the web faucet instead: https://app.testnet.bullet.xyz \
+             (fund address {address})."
+        )
+        .into());
+    }
+    println!("Faucet funded {address}");
+    println!("  {body}");
+    println!(
+        "Next: cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000"
+    );
+    Ok(())
 }
 
 async fn deposit(
@@ -614,50 +710,60 @@ async fn deposit(
 }
 
 async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::error::Error>> {
+    // Flatten every venue the bot trades, so a delta-neutral strategy's legs
+    // are both closed. Key material resolves via env (.env is auto-loaded). Each
+    // venue is skipped (not fatal) if its keys aren't configured — an HL-only
+    // user shouldn't be blocked by a missing Bullet key, and vice versa.
+    let bullet_cfg = bullet_config_from_env(network.clone());
+    match bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await {
+        Ok((bullet, _feeds)) => flatten_broker(&bullet, &symbol, "bullet").await?,
+        Err(e) => println!("[bullet] skipping flatten — connect failed: {e}"),
+    }
+
+    if let Some(hl_cfg) = hyperliquid_config_from_env(network) {
+        match connect_hyperliquid(&hl_cfg, &symbol).await {
+            Ok((hl, _feeds)) => flatten_broker(&hl, &symbol, "hyperliquid").await?,
+            Err(e) => println!("[hyperliquid] skipping flatten — connect failed: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// Cancel resting orders and market-close any open position on `symbol` for one
+/// broker. Used by `flatten` for each configured venue.
+async fn flatten_broker<B: Broker>(
+    broker: &B,
+    symbol: &str,
+    venue: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     use bb_core::types::{NewOrder, OrderType, Side};
     const FLATTEN_SLIPPAGE_BPS: u64 = 100;
 
-    // Reuse the adapter's connect path to get a real Broker. We don't need the
-    // feeds — just a broker handle. Key material resolves via env or the
-    // default keystore written by `bb-bot keygen`.
-    let bullet_cfg = bullet_config_from_env(network);
-    let (broker, _feeds) = bb_exchange_bullet::connect_bullet(&bullet_cfg, &symbol).await?;
-
-    let _ = broker.cancel_all_orders(&symbol).await;
+    let _ = broker.cancel_all_orders(symbol).await;
     let positions = broker.get_positions().await?;
-    let position = positions.iter().find(|p| p.symbol == symbol);
-
-    let Some(pos) = position else {
-        println!("No position on {symbol}. Nothing to flatten.");
+    let Some(pos) = positions.iter().find(|p| p.symbol == symbol && !p.size.is_zero()) else {
+        println!("[{venue}] No position on {symbol}. Nothing to flatten.");
         return Ok(());
     };
-    if pos.size.is_zero() {
-        println!("Position on {symbol} is already flat.");
-        return Ok(());
-    }
 
-    // Bullet reports size with a Side indicator; convert to signed and close
-    // with an opposite-side market order of the same magnitude.
+    // Close with an opposite-side market order of the same magnitude.
     let (close_side, qty) = match pos.side {
         Some(Side::Buy) => (Side::Sell, pos.size),
         Some(Side::Sell) => (Side::Buy, pos.size),
         None => {
-            println!("Position size {} with no side — skipping.", pos.size);
+            println!("[{venue}] Position size {} with no side — skipping.", pos.size);
             return Ok(());
         }
     };
 
-    // Bullet's Market order is an IoC limit: needs a bounded worst-case price.
-    // Fetch a fresh book and set price = opposite_side × (1 ± 1%). The IoC
-    // ensures the actual fill is at top-of-book or better.
-    let book = broker.get_orderbook(&symbol, 5).await?;
+    // Market here is an IoC limit: needs a bounded worst-case price. Use the
+    // opposing top-of-book ± 1%; the IoC fills at top-of-book or better.
+    let book = broker.get_orderbook(symbol, 5).await?;
     let base = match close_side {
         Side::Buy => book.best_ask().map(|l| l.price),
         Side::Sell => book.best_bid().map(|l| l.price),
     }
     .ok_or("Orderbook has no opposing-side liquidity — cannot flatten")?;
-    // 1% worst-case price — generous for a manual utility command;
-    // the IoC ensures we actually fill at or better than top-of-book.
     let slip = Decimal::from(FLATTEN_SLIPPAGE_BPS) / Decimal::from(10_000);
     let ioc_price = match close_side {
         Side::Buy => base * (Decimal::ONE + slip),
@@ -665,11 +771,11 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
     };
 
     println!(
-        "Flattening {symbol}: current size={} side={:?} → IoC {:?} {} @ {ioc_price}",
-        pos.size, pos.side, close_side, qty
+        "[{venue}] Flattening {symbol}: size={} side={:?} → IoC {:?} {qty} @ {ioc_price}",
+        pos.size, pos.side, close_side
     );
     let order = NewOrder {
-        symbol: symbol.clone(),
+        symbol: symbol.to_string(),
         side: close_side,
         order_type: OrderType::Market,
         price: ioc_price,
@@ -680,9 +786,9 @@ async fn flatten(network: String, symbol: String) -> Result<(), Box<dyn std::err
     let results = broker.place_orders(&[order]).await?;
     for r in &results {
         if r.success {
-            println!("Close order accepted: order_id={:?}", r.order_id);
+            println!("[{venue}] Close order accepted: order_id={:?}", r.order_id);
         } else {
-            println!("Close order FAILED: {:?}", r.error);
+            println!("[{venue}] Close order FAILED: {:?}", r.error);
         }
     }
     Ok(())
@@ -734,8 +840,23 @@ async fn observe(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    // Load .env into the process environment before anything reads env vars.
+    // Both paths use `from_path` (exact file, no parent-directory search) so a
+    // stray parent `.env` with different credentials can't be picked up when run
+    // from a subdirectory. Real environment variables already set win.
+    if let Some(path) = &cli.env_file {
+        dotenvy::from_path(path).map_err(|e| format!("--env-file {}: {e}", path.display()))?;
+        eprintln!("Loaded env from {}", path.display());
+    } else {
+        let default = std::path::Path::new(".env");
+        if default.exists() {
+            dotenvy::from_path(default).map_err(|e| format!(".env: {e}"))?;
+            eprintln!("Loaded env from .env");
+        }
+    }
     match cli.command {
         Command::Keygen { network, out } => keygen(&network, out),
+        Command::Faucet { network } => faucet(network).await,
         Command::Deposit { network, asset, amount } => deposit(network, asset, amount).await,
         Command::Flatten { network, symbol } => flatten(network, symbol).await,
         Command::Observe { network, symbol, binance_symbol, binance_market, output } => {
