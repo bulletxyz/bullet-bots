@@ -1,0 +1,20 @@
+crates/strategies/funding-arb/src/strategy.rs
+  s_14b07560542dd9::t_87d860e8b4c005 823,832-838
+  s_14b07560542dd9::t_e9d340469b40c9 214-220,237-238,243-254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "74a9f58c05ee0502fc983e9b54af012ab1eb9a9b",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
