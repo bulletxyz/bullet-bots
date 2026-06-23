@@ -211,9 +211,13 @@ impl FundingArbActor {
     /// leg of an entry failed. Cancels resting orders first.
     ///
     /// Closes at most `order_size` so a larger pre-existing position on a shared
-    /// wallet (not created by us) isn't disturbed. Returns `true` if the leg is
-    /// believed flat (no position, or close accepted), `false` if cleanup
-    /// couldn't be confirmed (read or close failed) so the caller won't go Flat.
+    /// wallet (not created by us) isn't disturbed. Returns `true` only when the
+    /// leg is confirmed flat (no position, or the live size ≤ `order_size` and
+    /// the capped close was accepted). Returns `false` — so the caller halts
+    /// instead of going Flat — when cleanup couldn't be confirmed: a read/close
+    /// failure, OR the live size **exceeds** `order_size` (the cap leaves a
+    /// remainder we won't blindly close, and the bot shouldn't trade on top of
+    /// an unexpected position).
     async fn flatten_filled_leg(&mut self, cx: &ActorContext, ex: &str) -> Result<bool, BotError> {
         let broker = cx.broker(ex)?;
         let _ = broker.cancel_all_orders(self.symbol()).await;
@@ -230,11 +234,24 @@ impl FundingArbActor {
         };
         let close_side = if matches!(pos.side, Some(Side::Buy)) { Side::Sell } else { Side::Buy };
         // Cap to what we tried to enter, so we don't close an external position.
+        // If the live size exceeds that, the cap leaves a remainder → not flat.
+        let fully_closes = pos.size <= self.config.order_size;
         let qty = pos.size.min(self.config.order_size);
         let mut order = self.make_order(ex, close_side, qty, true);
         order.order_type = OrderType::Market;
         match broker.place_orders(&[order]).await {
-            Ok(results) if results.first().is_some_and(|r| r.success) => Ok(true),
+            Ok(results) if results.first().is_some_and(|r| r.success) => {
+                if fully_closes {
+                    Ok(true)
+                } else {
+                    tracing::error!(
+                        exchange = %ex, live_size = %pos.size, closed = %qty,
+                        "Incomplete-entry: position exceeds order_size; closed our size but a \
+                         remainder remains (possibly external) — not treating leg as flat"
+                    );
+                    Ok(false)
+                }
+            }
             Ok(results) => {
                 let err =
                     results.first().and_then(|r| r.error.as_deref()).unwrap_or("order rejected");
@@ -803,7 +820,7 @@ mod tests {
             .wire_actor(ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>())
             .build()
             .unwrap();
-        harness.run().await.unwrap();
+        let reason = harness.run().await.unwrap();
 
         // Two place_orders on bullet: the entry, then the cleanup close.
         assert_eq!(bullet.placed_count().await, 2, "entry + cleanup close");
@@ -812,6 +829,13 @@ mod tests {
         assert_eq!(close[0].side, Side::Buy, "close is opposite the Sell fill");
         assert_eq!(close[0].quantity, d("1"), "capped to order_size, not the full 5");
         assert!(close[0].reduce_only, "cleanup close is reduce-only");
+        // Live size (5) exceeds order_size (1), so the capped close leaves a
+        // remainder → the leg is NOT confirmed flat → the actor requests
+        // shutdown rather than going Flat (which would allow re-entry on top).
+        assert!(
+            matches!(reason, WindDownReason::Signal),
+            "unconfirmed cleanup should request shutdown, not go flat"
+        );
     }
 
     // -------------------------------------------------------------------------
