@@ -1,0 +1,22 @@
+crates/strategies/funding-arb/src/strategy.rs
+  s_14b07560542dd9::t_2d6ca6b31a6d5a 766-816
+crates/bb-core/src/harness/testing.rs
+  s_14b07560542dd9::t_1ac31c93b2d74f 167-168,184,188-190
+  s_14b07560542dd9::t_1e403d16d4d295 280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "76154b87a0084d0f047026aad631649972e506b4",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
