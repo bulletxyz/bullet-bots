@@ -71,8 +71,10 @@ pub fn spot_state_to_balances(resp: &UserTokenBalanceResponse) -> Vec<Balance> {
     resp.balances
         .iter()
         .map(|b| {
-            let total = parse_dec(&b.total);
-            let hold = parse_dec(&b.hold);
+            // Warn (not silently zero) on malformed numerics, matching how
+            // positions/trades parse elsewhere in this module.
+            let total = parse_decimal_or_warn(&b.total, "spot total").unwrap_or(Decimal::ZERO);
+            let hold = parse_decimal_or_warn(&b.hold, "spot hold").unwrap_or(Decimal::ZERO);
             Balance { asset: b.coin.clone(), available: total - hold, total }
         })
         .filter(|b| !b.total.is_zero())

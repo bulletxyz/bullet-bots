@@ -631,7 +631,8 @@ fn hyperliquid_config_from_env(network: String) -> Option<HyperliquidConfig> {
     use secrecy::SecretString;
 
     let private_key = std::env::var("BB_HYPERLIQUID_PRIVATE_KEY").ok().filter(|v| !v.is_empty());
-    let key_file = std::env::var_os("BB_HYPERLIQUID_KEY_FILE").map(Into::into);
+    let key_file =
+        std::env::var("BB_HYPERLIQUID_KEY_FILE").ok().filter(|v| !v.is_empty()).map(Into::into);
     if private_key.is_none() && key_file.is_none() {
         return None;
     }
@@ -840,17 +841,17 @@ async fn observe(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     // Load .env into the process environment before anything reads env vars.
-    // An explicit --env-file must exist; the default ./.env is optional. Real
-    // environment variables already set are never overridden.
-    match &cli.env_file {
-        Some(path) => {
-            dotenvy::from_path(path).map_err(|e| format!("--env-file {}: {e}", path.display()))?;
-            eprintln!("Loaded env from {}", path.display());
-        }
-        None => {
-            if let Ok(path) = dotenvy::dotenv() {
-                eprintln!("Loaded env from {}", path.display());
-            }
+    // Both paths use `from_path` (exact file, no parent-directory search) so a
+    // stray parent `.env` with different credentials can't be picked up when run
+    // from a subdirectory. Real environment variables already set win.
+    if let Some(path) = &cli.env_file {
+        dotenvy::from_path(path).map_err(|e| format!("--env-file {}: {e}", path.display()))?;
+        eprintln!("Loaded env from {}", path.display());
+    } else {
+        let default = std::path::Path::new(".env");
+        if default.exists() {
+            dotenvy::from_path(default).map_err(|e| format!(".env: {e}"))?;
+            eprintln!("Loaded env from .env");
         }
     }
     match cli.command {

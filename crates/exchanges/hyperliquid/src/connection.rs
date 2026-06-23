@@ -311,20 +311,28 @@ async fn subscribe_feeds(
 ///
 /// On a unified account the USDC collateral lives in the spot balance, so the
 /// broker reads balances from `user_token_balances` instead of the perp
-/// clearinghouse. A network/parse failure defaults to `false` (standard
-/// account) — balances then use the perp view, the prior behavior.
+/// clearinghouse. Retries a few times so a transient startup failure doesn't
+/// lock the broker into the wrong balance mode for the whole session; if it
+/// still fails it defaults to `false` (perp view) and warns loudly.
 async fn detect_unified_account(info: &InfoClient, address: H160) -> bool {
     let body = format!(r#"{{"type":"userAbstraction","user":"{address:?}"}}"#);
-    match info.http_client.post("/info", body).await {
-        Ok(resp) => account_mode_is_unified(&resp),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "Hyperliquid: userAbstraction query failed; assuming standard account"
-            );
-            false
+    for attempt in 1..=3u32 {
+        match info.http_client.post("/info", body.clone()).await {
+            Ok(resp) => return account_mode_is_unified(&resp),
+            Err(e) => {
+                tracing::warn!(attempt, error = %e, "Hyperliquid: userAbstraction probe failed");
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
         }
     }
+    tracing::warn!(
+        "Hyperliquid: could not determine account mode after retries — assuming standard \
+         (perp) balances. If this is a unified account, balances will under-report until \
+         restart."
+    );
+    false
 }
 
 /// True if the `userAbstraction` response indicates a unified account.

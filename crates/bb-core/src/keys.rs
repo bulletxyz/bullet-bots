@@ -51,7 +51,9 @@ mod tests {
 
     #[test]
     fn file_takes_precedence_over_inline_and_trims() {
-        let path = std::env::temp_dir().join("bb_core_keys_precedence.key");
+        // Unique per process so parallel test runs don't collide.
+        let path = std::env::temp_dir()
+            .join(format!("bb_core_keys_precedence_{}.key", std::process::id()));
         std::fs::write(&path, "  filekey\n").expect("write");
         let got = resolve_key_string(Some(&path), "inlinekey").expect("resolve");
         assert_eq!(got.as_deref(), Some("filekey"));
