@@ -1,0 +1,23 @@
+crates/exchanges/bullet/src/delegate.rs
+  s_14b07560542dd9::t_4acc38745bfc57 21-22,35-37
+  s_14b07560542dd9::t_84a14ab2c2163c 39-52
+crates/strategies/funding-arb/src/strategy.rs
+  s_14b07560542dd9::t_96a0f31f27bd98 846-849,851,854
+  s_14b07560542dd9::t_26cb146d9b4dce 297-313,315-318,322-327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "0f038523d2103b60fb62925020b0544414bb33e1",
+  "prompts": {},
+  "sessions": {
+    "s_14b07560542dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5baf3e0f-2b08-44a7-8fd6-9a1f0a20941c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
