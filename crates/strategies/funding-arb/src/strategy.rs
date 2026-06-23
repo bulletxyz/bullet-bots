@@ -763,6 +763,57 @@ mod tests {
         assert!(hl_cancels >= 1, "cancel_all_orders should be called on hl after failure");
     }
 
+    /// Incomplete entry where one leg fills and the other is rejected: the
+    /// filled leg must be flattened, and the close must be capped to
+    /// `order_size` so a larger pre-existing position (shared wallet) isn't
+    /// disturbed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn incomplete_entry_closes_filled_leg_capped_to_order_size() {
+        let bullet = MockBroker::shared("bullet");
+        let hl = MockBroker::shared("hl");
+
+        // Short leg (bullet) fills; long leg (hl) is rejected.
+        bullet.queue_place_response(Ok(())).await; // entry
+        bullet.queue_place_response(Ok(())).await; // cleanup close
+        hl.queue_place_response(Err(BotError::exchange("venue error", false))).await;
+
+        // Bullet holds a SHORT of 5 — larger than order_size (1). The cleanup
+        // must close only order_size, not the full 5.
+        bullet
+            .set_positions(vec![Position {
+                symbol: "BTC-PERP".into(),
+                side: Some(Side::Sell),
+                size: d("5"),
+                entry_price: d("100"),
+                unrealized_pnl: d("0"),
+            }])
+            .await;
+
+        // rate_a (bullet) 0.002 > rate_b (hl) 0.0005 → short bullet, long hl.
+        let marks = ScriptedFeed::new(vec![
+            mark("bullet", "100", Some("0.002")),
+            mark("hl", "100", Some("0.0005")),
+        ]);
+
+        let actor = FundingArbActor::with_client_ids(test_config(), ClientIdIssuer::new());
+        let harness = HarnessBuilder::new()
+            .wire_broker("bullet", bullet.clone() as Arc<dyn Broker>)
+            .wire_broker("hl", hl.clone() as Arc<dyn Broker>)
+            .wire_feed_named("marks", marks)
+            .wire_actor(ActorSpec::new("funding-arb", actor).sub::<MarkPriceUpdate>().sub::<Tick>())
+            .build()
+            .unwrap();
+        harness.run().await.unwrap();
+
+        // Two place_orders on bullet: the entry, then the cleanup close.
+        assert_eq!(bullet.placed_count().await, 2, "entry + cleanup close");
+        let close = bullet.last_placed_orders().await;
+        assert_eq!(close.len(), 1, "one cleanup close order");
+        assert_eq!(close[0].side, Side::Buy, "close is opposite the Sell fill");
+        assert_eq!(close[0].quantity, d("1"), "capped to order_size, not the full 5");
+        assert!(close[0].reduce_only, "cleanup close is reduce-only");
+    }
+
     // -------------------------------------------------------------------------
     // Full `Flat → Entering → Active → Exiting → Flat` cycle driven by
     /// `ScriptedFeed`s and `MockBroker`.
