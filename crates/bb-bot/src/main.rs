@@ -484,10 +484,9 @@ fn validate(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 // -- Auxiliary commands (unchanged) -----------------------------------------
 
 fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let faucet_host = match network {
-        "mainnet" => return Err("Faucet is only available on testnet".into()),
-        _ => "app.testnet.bullet.xyz",
-    };
+    if network == "mainnet" {
+        return Err("Faucet is only available on testnet".into());
+    }
 
     let path = out.unwrap_or_else(default_key_path);
     if path.exists() {
@@ -518,11 +517,9 @@ fn keygen(network: &str, out: Option<PathBuf>) -> Result<(), Box<dyn std::error:
     println!();
     println!("Fund via faucet:");
     println!("  cargo run --bin bb-bot -- faucet --network {network}");
-    // The faucet host rejects a plain curl (no browser User-Agent → "Forbidden"),
-    // so if you call it directly, set one:
     println!(
         "  # or: curl -X POST -H \"User-Agent: Mozilla/5.0\" \
-         \"https://{faucet_host}/api/testnet/faucet?address={address}\""
+         \"https://api.testnet.bullet.xyz/faucet?address={address}\""
     );
     println!();
     println!(
@@ -663,14 +660,16 @@ async fn faucet(network: String) -> Result<(), Box<dyn std::error::Error>> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        // The faucet is Cloudflare-protected and rate-limited; a 403 usually
-        // means "already funded recently from this IP" or a bot challenge. The
-        // web faucet is the reliable fallback.
+        // A 409 means the address already has a trading account; the faucet
+        // only funds fresh wallets, so deposit from the existing balance instead.
+        return Err(format!("Faucet request failed (HTTP {status}): {body}").into());
+    }
+    // A 2xx with a non-JSON body (e.g. an HTML challenge page) is not a funding
+    // receipt, so never report it as a success.
+    if serde_json::from_str::<serde_json::Value>(&body).is_err() {
         return Err(format!(
-            "Faucet request failed (HTTP {status}): {body}\n\
-             It may be rate-limited (already funded recently) or blocking automated \
-             requests. Use the web faucet instead: https://app.testnet.bullet.xyz \
-             (fund address {address})."
+            "Faucet returned an unexpected non-JSON response (HTTP {status}). \
+             Fund {address} via the web faucet instead: https://app.testnet.bullet.xyz"
         )
         .into());
     }

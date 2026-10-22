@@ -12,6 +12,23 @@ ignore = [
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    # rustls-webpki 0.101.7 (also ethers → rustls 0.21), wrong-name check.
+    "RUSTSEC-2026-0382",
+
+    # rustls 0.21 - ethers → reqwest 0.11 → hyper-rustls 0.24.
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
+
+    # h2 0.3 - ethers → reqwest 0.11 → hyper 0.14.
+    "RUSTSEC-2026-0258",
+
+    # webpki-roots 0.25 - ethers → reqwest 0.11.
+    "RUSTSEC-2026-0381",
+
+    # zip 0.6 - ethers → ethers-solc → svm-rs (solc installer, not on the trading path).
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 
     # fxhash unmaintained. Transitive: ethers → hashers.
     "RUSTSEC-2025-0057",
