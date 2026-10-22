@@ -21,6 +21,7 @@ use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
 use bb_core::health::ConnectionHealth;
 use ethers::signers::{LocalWallet, Signer};
+use ethers::types::H160;
 use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
 use tokio::sync::mpsc;
 
@@ -52,11 +53,42 @@ pub async fn connect(
     config: &HyperliquidConfig,
     symbol: &str,
 ) -> Result<(HyperliquidBroker, HyperliquidFeeds), BotError> {
-    let raw_key = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
+    let raw_key = bb_core::keys::resolve_key_string(
+        config.key_file.as_deref(),
+        secrecy::ExposeSecret::expose_secret(&config.private_key),
+    )?
+    .ok_or_else(|| {
+        BotError::config(
+            "Hyperliquid: no key material — set [exchanges.hyperliquid].key_file, \
+             BB_HYPERLIQUID_KEY_FILE, private_key, or BB_HYPERLIQUID_PRIVATE_KEY"
+                .to_string(),
+        )
+    })?;
     let key_hex = raw_key.strip_prefix("0x").unwrap_or(raw_key.as_str());
     let wallet: LocalWallet =
         key_hex.parse().map_err(|e| BotError::config(format!("Invalid HL private key: {e}")))?;
-    let address = wallet.address();
+    let signer_address = wallet.address();
+    // Reads/subscriptions target the master account; for an API/agent wallet
+    // that's `account_address`, otherwise the signer's own address. Signing
+    // always uses `wallet`.
+    let address = resolve_account_address(config.account_address.as_deref(), signer_address)?;
+    if address == signer_address {
+        // No master configured. Fine for a main-wallet key, but it's also what
+        // an API/agent wallet looks like with account_address forgotten — and
+        // then positions/balances/fills come back empty. Surface a hint.
+        tracing::info!(
+            signer = %format!("{signer_address:?}"),
+            "Hyperliquid: no account_address set; reading account state from the signer's own \
+             address. If this key is an API/agent wallet, set BB_HYPERLIQUID_ACCOUNT_ADDRESS to \
+             your main account."
+        );
+    } else {
+        tracing::info!(
+            signer = %format!("{signer_address:?}"),
+            account = %format!("{address:?}"),
+            "Hyperliquid: signing with API/agent wallet, reading from master account"
+        );
+    }
     let base_url = match config.network.as_str() {
         "mainnet" => BaseUrl::Mainnet,
         "testnet" => BaseUrl::Testnet,
@@ -73,6 +105,16 @@ pub async fn connect(
     let info =
         InfoClient::new(None, Some(base_url)).await.map_err(|e| BotError::exchange(e, true))?;
 
+    // On a unified account, USDC collateral lives in the spot balance, not the
+    // perp clearinghouse — so the broker must read balances from there.
+    let unified = detect_unified_account(&info, address).await;
+    if unified {
+        tracing::info!(
+            account = %format!("{address:?}"),
+            "Hyperliquid: unified account — reading collateral from the spot balance"
+        );
+    }
+
     // Separate InfoClient for WS (needs `with_reconnect` and stays alive in the
     // muxer task). The REST `info` above is kept on the broker for queries.
     let mut ws_info = InfoClient::with_reconnect(None, Some(base_url))
@@ -82,19 +124,14 @@ pub async fn connect(
     let (ws_tx, ws_rx) = mpsc::unbounded_channel::<Message>();
     let coin = convert::to_hl_coin(symbol);
 
-    for (label, sub) in [
-        ("L2Book", Subscription::L2Book { coin: coin.clone() }),
-        ("OrderUpdates", Subscription::OrderUpdates { user: address }),
-        ("UserFills", Subscription::UserFills { user: address }),
-        ("AllMids", Subscription::AllMids),
-        ("ActiveAssetCtx", Subscription::ActiveAssetCtx { coin: coin.clone() }),
-    ] {
-        ws_info
-            .subscribe(sub, ws_tx.clone())
-            .await
-            .map_err(|e| BotError::exchange(format!("HL subscribe {label}: {e}"), false))?;
-    }
-    tracing::info!(symbol, coin = %coin, address = %format!("{address:?}"), "Hyperliquid: subscribed");
+    subscribe_feeds(&mut ws_info, address, &coin, &ws_tx).await?;
+    tracing::info!(
+        symbol,
+        coin = %coin,
+        signer = %format!("{signer_address:?}"),
+        account = %format!("{address:?}"),
+        "Hyperliquid: subscribed"
+    );
 
     let (trade_tx, trade_rx) = mpsc::unbounded_channel::<Trade>();
     let (book_tx, book_rx) = mpsc::channel::<BookUpdate>(BOOK_CHANNEL_CAPACITY);
@@ -122,7 +159,8 @@ pub async fn connect(
         target_coin,
     ));
 
-    let broker = HyperliquidBroker::new(exchange_client, info, address, health, client_ids);
+    let broker =
+        HyperliquidBroker::new(exchange_client, info, address, unified, health, client_ids);
     let feeds = HyperliquidFeeds {
         trade: MpscFeed::new(trade_rx),
         book: MpscFeed::bounded(book_rx),
@@ -244,4 +282,111 @@ async fn muxer_loop(
         }
     }
     tracing::warn!("Hyperliquid: WS muxer ended");
+}
+
+/// Subscribe to the venue's WS feeds (book, user orders/fills, mids, asset ctx)
+/// for `coin`/`address`, forwarding messages to `ws_tx`.
+async fn subscribe_feeds(
+    ws_info: &mut InfoClient,
+    address: H160,
+    coin: &str,
+    ws_tx: &mpsc::UnboundedSender<Message>,
+) -> Result<(), BotError> {
+    for (label, sub) in [
+        ("L2Book", Subscription::L2Book { coin: coin.to_string() }),
+        ("OrderUpdates", Subscription::OrderUpdates { user: address }),
+        ("UserFills", Subscription::UserFills { user: address }),
+        ("AllMids", Subscription::AllMids),
+        ("ActiveAssetCtx", Subscription::ActiveAssetCtx { coin: coin.to_string() }),
+    ] {
+        ws_info
+            .subscribe(sub, ws_tx.clone())
+            .await
+            .map_err(|e| BotError::exchange(format!("HL subscribe {label}: {e}"), false))?;
+    }
+    Ok(())
+}
+
+/// Query the `userAbstraction` info endpoint to detect a unified account.
+///
+/// On a unified account the USDC collateral lives in the spot balance, so the
+/// broker reads balances from `user_token_balances` instead of the perp
+/// clearinghouse. Retries a few times so a transient startup failure doesn't
+/// lock the broker into the wrong balance mode for the whole session; if it
+/// still fails it defaults to `false` (perp view) and warns loudly.
+async fn detect_unified_account(info: &InfoClient, address: H160) -> bool {
+    let body = format!(r#"{{"type":"userAbstraction","user":"{address:?}"}}"#);
+    for attempt in 1..=3u32 {
+        match info.http_client.post("/info", body.clone()).await {
+            Ok(resp) => return account_mode_is_unified(&resp),
+            Err(e) => {
+                tracing::warn!(attempt, error = %e, "Hyperliquid: userAbstraction probe failed");
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    tracing::warn!(
+        "Hyperliquid: could not determine account mode after retries — assuming standard \
+         (perp) balances. If this is a unified account, balances will under-report until \
+         restart."
+    );
+    false
+}
+
+/// True if the `userAbstraction` response indicates a unified account.
+/// The endpoint returns a bare JSON string, e.g. `"unifiedAccount"`.
+fn account_mode_is_unified(body: &str) -> bool {
+    body.contains("unifiedAccount")
+}
+
+/// Address used for reads and subscriptions: the configured master
+/// `account_address` when set (API/agent-wallet case), otherwise the signer's
+/// own address. Signing always uses the wallet, not this address.
+fn resolve_account_address(configured: Option<&str>, signer: H160) -> Result<H160, BotError> {
+    match configured.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(addr) => addr.parse::<H160>().map_err(|e| {
+            BotError::config(format!("Invalid hyperliquid account_address '{addr}': {e}"))
+        }),
+        None => Ok(signer),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ethers::types::H160;
+
+    use super::resolve_account_address;
+
+    #[test]
+    fn unset_falls_back_to_signer() {
+        let signer = H160::repeat_byte(0xAB);
+        assert_eq!(resolve_account_address(None, signer).expect("none"), signer);
+        // Empty / whitespace is treated as unset.
+        assert_eq!(resolve_account_address(Some("  "), signer).expect("blank"), signer);
+    }
+
+    #[test]
+    fn set_uses_configured_master() {
+        let signer = H160::repeat_byte(0xAB);
+        let master = "0x1111111111111111111111111111111111111111";
+        let got = resolve_account_address(Some(master), signer).expect("master");
+        assert_eq!(got, master.parse::<H160>().expect("parse master"));
+        assert_ne!(got, signer);
+    }
+
+    #[test]
+    fn invalid_master_errors() {
+        let signer = H160::repeat_byte(0xAB);
+        assert!(resolve_account_address(Some("not-an-address"), signer).is_err());
+    }
+
+    #[test]
+    fn detects_unified_account_from_response() {
+        use super::account_mode_is_unified;
+        assert!(account_mode_is_unified("\"unifiedAccount\""));
+        assert!(!account_mode_is_unified("\"standardAccount\""));
+        assert!(!account_mode_is_unified("null"));
+    }
 }

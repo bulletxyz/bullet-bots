@@ -32,6 +32,7 @@ pub(crate) struct Increments {
 
 pub struct BulletBroker {
     client: Arc<Client>,
+    account_address: String,
     increments: HashMap<String, Increments>,
     health: Arc<ConnectionHealth>,
 }
@@ -39,10 +40,11 @@ pub struct BulletBroker {
 impl BulletBroker {
     pub(crate) fn new(
         client: Arc<Client>,
+        account_address: String,
         increments: HashMap<String, Increments>,
         health: Arc<ConnectionHealth>,
     ) -> Self {
-        Self { client, increments, health }
+        Self { client, account_address, increments, health }
     }
 
     fn market_id(&self, symbol: &str) -> Result<MarketId, BotError> {
@@ -114,7 +116,12 @@ impl Broker for BulletBroker {
     }
 
     async fn get_balances(&self) -> Result<Vec<Balance>, BotError> {
-        let resp = self.client.my_balances().await.map_err(|e| BotError::exchange(e, true))?;
+        let resp = self
+            .client
+            .account_balance(&self.account_address)
+            .await
+            .map_err(|e| BotError::exchange(e, true))?
+            .into_inner();
         Ok(resp
             .iter()
             .map(|b| Balance {
@@ -126,7 +133,12 @@ impl Broker for BulletBroker {
     }
 
     async fn get_positions(&self) -> Result<Vec<Position>, BotError> {
-        let resp = self.client.my_account().await.map_err(|e| BotError::exchange(e, true))?;
+        let resp = self
+            .client
+            .account_info(&self.account_address)
+            .await
+            .map_err(|e| BotError::exchange(e, true))?
+            .into_inner();
         Ok(resp
             .positions
             .iter()
@@ -146,8 +158,12 @@ impl Broker for BulletBroker {
     }
 
     async fn get_open_orders(&self, symbol: &str) -> Result<Vec<Order>, BotError> {
-        let resp =
-            self.client.my_open_orders(symbol).await.map_err(|e| BotError::exchange(e, true))?;
+        let resp = self
+            .client
+            .query_open_orders(&self.account_address, Some(symbol))
+            .await
+            .map_err(|e| BotError::exchange(e, true))?
+            .into_inner();
         Ok(resp
             .iter()
             .map(|o| {

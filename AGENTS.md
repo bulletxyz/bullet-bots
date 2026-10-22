@@ -35,7 +35,7 @@ Generate a keypair (first time):
 
 ```sh
 cargo run --bin bb-bot -- keygen --network testnet
-# → writes ~/.config/bullet/id.json (0600), prints address + faucet curl
+# → writes ~/.config/bullet/id.key (base58 secret, 0600), prints address + faucet curl
 ```
 
 Fund and onboard the account (first time). The faucet credits the on-chain
@@ -49,18 +49,18 @@ order placement fail with `user_variants not found`:
 cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000
 ```
 
-Run a bot (default: reads `~/.config/bullet/id.json`):
+Run a bot (default: reads `~/.config/bullet/id.key`):
 
 ```sh
 cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
 ```
 
-Or point at an explicit keystore / use hex for CI:
+Or point at an explicit key file / pass a key string for CI:
 
 ```sh
-export BB_BULLET_KEY_FILE="/path/to/keystore.json"   # preferred
-# OR
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."             # fallback
+export BB_BULLET_KEY_FILE="/path/to/id.key"          # preferred
+# OR (base58 from Phantom/delegation export, or hex)
+export BB_BULLET_PRIVATE_KEY="<base58-or-hex>"        # fallback
 ```
 
 ## Architecture — the harness, feeds, and actors
@@ -294,6 +294,13 @@ the full walkthrough including reconnect patterns and the `Trade` /
 `InfoClient::with_reconnect` handles reconnection. Symbol mapping: Bullet
 `"BTC-USD"` ↔ HL `"BTC"`. `ActiveAssetCtx` provides real funding rates;
 `AllMids` remains a mark-price fallback when no funding field is present.
+**API/agent wallets**: set `account_address` (env `BB_HYPERLIQUID_ACCOUNT_ADDRESS`)
+to the master account. The agent key signs (orders are attributed to the master
+on-chain, `vault_address: None` per the SDK's `approve_agent` pattern); reads
+(`user_state` / `open_orders` / `user_fills`) and the `UserFills` / `OrderUpdates`
+subscriptions use `account_address`. Unset → reads default to the signer's own
+address (main-wallet-key case). HL has no on-chain delegate lookup, so unlike
+Bullet the master must be given explicitly.
 
 ## Config Format
 
@@ -303,15 +310,22 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 - `[engine]` — `tick_interval_ms`, `status_port` (optional), or
   `status_bind = "host:port"` for explicit bind. `symbol` lives inside each
   `[strategy.<name>]` section so multi-symbol setups are explicit.
-- Exchange configs: `type = "<name>"` + adapter-specific fields. Bullet
-  resolves key material in this order (explicit config wins; env fills a
-  field the config omits, so an ambient env var can't silently switch
-  wallets): `key_file` (in config) → env `BB_BULLET_KEY_FILE` →
-  `private_key_hex` (in config) → env `BB_BULLET_PRIVATE_KEY_HEX`. File-based
-  keystore is preferred — see `bb-bot keygen`. Hyperliquid keys via
-  `BB_HYPERLIQUID_PRIVATE_KEY_HEX`. (Standalone `deposit`/`flatten`/`observe`
-  take no config, so there env is the source: `BB_BULLET_KEY_FILE` → env hex
-  → default keystore.)
+- Exchange configs: `type = "<name>"` + adapter-specific fields. Keys use each
+  venue's native format: **base58 for Bullet**, **hex for Hyperliquid** — paste
+  what the UI gives you. Both adapters resolve key material identically through
+  `bb_core::keys::resolve_key_string`, in this order (explicit config wins; env
+  fills a field the config omits, so an ambient env var can't silently switch
+  wallets): `key_file` (config) → env `BB_<VENUE>_KEY_FILE` → `private_key`
+  (config) → env `BB_<VENUE>_PRIVATE_KEY`. A `key_file` is a file containing the
+  key string (as written by `bb-bot keygen`), not a JSON keystore. If a Bullet
+  signer is a **delegate** key, the adapter resolves it to its master account
+  (via the `delegateOf` endpoint) for all reads and the user-orders
+  subscription; signing uses the delegate key directly. For Hyperliquid API/agent
+  wallets, set `BB_HYPERLIQUID_ACCOUNT_ADDRESS` (or `account_address` in config)
+  to the master account. `bb-bot` auto-loads `./.env` at startup (override with
+  `--env-file <path>`); already-set environment variables take precedence.
+  (Standalone `deposit`/`flatten`/`observe` take no config, so there env is the
+  source: `BB_BULLET_KEY_FILE` → `BB_BULLET_PRIVATE_KEY` → default key file.)
 - Strategy configs: `type = "<name>"` with sub-table `[strategy.<name>]`.
 
 ## Code Style

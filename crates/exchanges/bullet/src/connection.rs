@@ -22,8 +22,7 @@ use bb_core::harness::MpscFeed;
 use bb_core::health::ConnectionHealth;
 use bullet_rust_sdk::ws::models::ServerMessage;
 use bullet_rust_sdk::{
-    Client, Keypair, ManagedWebsocket, Network, OrderbookDepth, Topic, UserActionDiscriminants,
-    WsEvent,
+    Client, ManagedWebsocket, Network, OrderbookDepth, Topic, UserActionDiscriminants, WsEvent,
 };
 use tokio::sync::mpsc;
 
@@ -83,21 +82,18 @@ pub async fn connect(
     config: &BulletConfig,
     symbol: &str,
 ) -> Result<(BulletBroker, BulletFeeds), BotError> {
-    let keypair = if let Some(path) = config.key_file.as_deref() {
-        Keypair::read_from_file(path).map_err(|e| {
-            BotError::config(format!("Failed to load keystore {}: {e}", path.display()))
-        })?
-    } else {
-        let hex = secrecy::ExposeSecret::expose_secret(&config.private_key_hex);
-        if hex.is_empty() {
-            return Err(BotError::config(
-                "Bullet: no key material — set [exchanges.bullet].key_file, \
-                 BB_BULLET_KEY_FILE, private_key_hex, or BB_BULLET_PRIVATE_KEY_HEX"
-                    .to_string(),
-            ));
-        }
-        Keypair::from_hex(hex).map_err(|e| BotError::config(format!("Invalid private key: {e}")))?
-    };
+    let secret = bb_core::keys::resolve_key_string(
+        config.key_file.as_deref(),
+        secrecy::ExposeSecret::expose_secret(&config.private_key),
+    )?
+    .ok_or_else(|| {
+        BotError::config(
+            "Bullet: no key material — set [exchanges.bullet].key_file, \
+             BB_BULLET_KEY_FILE, private_key, or BB_BULLET_PRIVATE_KEY"
+                .to_string(),
+        )
+    })?;
+    let keypair = crate::key::keypair_from_secret(&secret)?;
     let network = match config.network.as_str() {
         "mainnet" => Network::Mainnet,
         "testnet" => Network::Testnet,
@@ -122,19 +118,20 @@ pub async fn connect(
         .map_err(|e| BotError::exchange(e, true))?;
 
     let address = client.address().map_err(|e| BotError::exchange(e, false))?;
+    let account_address = crate::delegate::resolve_account_address(client.url(), &address).await?;
     let increments = load_increments(&client).await?;
     let client = Arc::new(client);
 
     // Set up WS + subscriptions.
     let ws = client.connect_ws_managed().call().await.map_err(|e| BotError::exchange(e, true))?;
     // Bullet user-order stream: address-prefixed topic (no listenKey flow).
-    let user_topic = Topic::user_orders(address.clone()).to_string();
+    let user_topic = Topic::user_orders(account_address.clone()).to_string();
     ws.subscribe(
         [
             Topic::depth(symbol, OrderbookDepth::D20),
             Topic::book_ticker(symbol),
             Topic::mark_price(symbol),
-            Topic::user_orders(address.clone()),
+            Topic::user_orders(account_address.clone()),
         ],
         None,
     )
@@ -142,7 +139,8 @@ pub async fn connect(
 
     tracing::info!(
         symbol,
-        address = %address,
+        signer = %address,
+        account = %account_address,
         user_topic,
         symbols_known = client.symbols().len(),
         "Bullet: connected + subscribed"
@@ -165,7 +163,7 @@ pub async fn connect(
     // stays alive for the lifetime of the task.
     tokio::spawn(muxer_loop(ws, trade_tx, book_tx, life_tx, mark_tx, Arc::clone(&health)));
 
-    let broker = BulletBroker::new(Arc::clone(&client), increments, health);
+    let broker = BulletBroker::new(Arc::clone(&client), account_address, increments, health);
     let feeds = BulletFeeds {
         trade: MpscFeed::new(trade_rx),
         book: MpscFeed::bounded(book_rx),

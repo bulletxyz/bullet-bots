@@ -54,15 +54,28 @@ pub(crate) fn register_client_id(map: &ClientIdMap, client_id: &str) -> Uuid {
     cloid
 }
 
+/// Normalize a cloid string to the canonical `Uuid` form used as the map key.
+/// HL echoes cloids on fills/order-updates as `0x` + 32 hex (no hyphens), while
+/// we key the map by `Uuid::to_string()` (hyphenated). Without normalizing, a
+/// fill's cloid wouldn't match the stored key, so the strategy would discard
+/// its own fills as "external" and never update inventory.
+fn normalize_cloid(cloid: &str) -> String {
+    let hex = cloid.strip_prefix("0x").or_else(|| cloid.strip_prefix("0X")).unwrap_or(cloid);
+    Uuid::parse_str(hex).map_or_else(|_| cloid.to_string(), |u| u.to_string())
+}
+
 pub(crate) fn original_client_id(map: &ClientIdMap, cloid: &str) -> String {
     let guard = map.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.get(cloid).cloned().unwrap_or_else(|| cloid.to_string())
+    guard.get(&normalize_cloid(cloid)).cloned().unwrap_or_else(|| cloid.to_string())
 }
 
 pub struct HyperliquidBroker {
     exchange: ExchangeClient,
     info: InfoClient,
     address: H160,
+    /// Unified account: collateral lives in the spot balance, so `get_balances`
+    /// reads `user_token_balances` rather than the perp clearinghouse.
+    unified: bool,
     health: Arc<ConnectionHealth>,
     client_ids: ClientIdMap,
 }
@@ -72,10 +85,11 @@ impl HyperliquidBroker {
         exchange: ExchangeClient,
         info: InfoClient,
         address: H160,
+        unified: bool,
         health: Arc<ConnectionHealth>,
         client_ids: ClientIdMap,
     ) -> Self {
-        Self { exchange, info, address, health, client_ids }
+        Self { exchange, info, address, unified, health, client_ids }
     }
 }
 
@@ -100,6 +114,16 @@ impl Broker for HyperliquidBroker {
     }
 
     async fn get_balances(&self) -> Result<Vec<Balance>, BotError> {
+        // Unified account: collateral is in the spot balance, not the perp
+        // clearinghouse (whose accountValue is only per-position margin).
+        if self.unified {
+            let spot = self
+                .info
+                .user_token_balances(self.address)
+                .await
+                .map_err(|e| BotError::exchange(e, true))?;
+            return Ok(convert::spot_state_to_balances(&spot));
+        }
         let state =
             self.info.user_state(self.address).await.map_err(|e| BotError::exchange(e, true))?;
         Ok(convert::user_state_to_balances(&state))
@@ -155,8 +179,11 @@ impl Broker for HyperliquidBroker {
                     OrderType::PostOnly => "Alo",
                     OrderType::Market => "Ioc",
                 };
-                let price_f64 = o.price.to_f64().ok_or_else(|| {
-                    BotError::strategy(format!("HL: cannot convert price {} to f64", o.price))
+                // HL rejects over-precise prices ("Order has invalid price"); snap
+                // to its 5-significant-figure rule before submitting.
+                let price = convert::hl_round_price(o.price);
+                let price_f64 = price.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!("HL: cannot convert price {price} to f64"))
                 })?;
                 let sz_f64 = o.quantity.to_f64().ok_or_else(|| {
                     BotError::strategy(format!("HL: cannot convert quantity {} to f64", o.quantity))
@@ -305,11 +332,9 @@ impl Broker for HyperliquidBroker {
                     OrderType::PostOnly => "Alo",
                     OrderType::Market => "Ioc",
                 };
-                let price_f64 = amend.new_order.price.to_f64().ok_or_else(|| {
-                    BotError::strategy(format!(
-                        "HL amend: cannot convert price {} to f64",
-                        amend.new_order.price
-                    ))
+                let price = convert::hl_round_price(amend.new_order.price);
+                let price_f64 = price.to_f64().ok_or_else(|| {
+                    BotError::strategy(format!("HL amend: cannot convert price {price} to f64"))
                 })?;
                 let sz_f64 = amend.new_order.quantity.to_f64().ok_or_else(|| {
                     BotError::strategy(format!(
@@ -496,7 +521,14 @@ mod tests {
         let ids = new_client_id_map();
         let cloid = register_client_id(&ids, "42");
 
+        // Hyphenated Uuid form (how we store the key).
         assert_eq!(original_client_id(&ids, &cloid.to_string()), "42");
+        // HL wire form on fills: `0x` + 32 hex, no hyphens — must also resolve,
+        // else the strategy discards its own HL fills.
+        let hl_wire = format!("0x{}", cloid.simple());
+        assert_eq!(original_client_id(&ids, &hl_wire), "42");
+        // Bare 32-hex (no prefix) resolves too.
+        assert_eq!(original_client_id(&ids, &cloid.simple().to_string()), "42");
     }
 
     #[test]

@@ -340,6 +340,8 @@ dependencies = [
  "bb-strategy-simple-mm",
  "bullet-rust-sdk",
  "clap",
+ "dotenvy",
+ "reqwest 0.13.2",
  "rust_decimal",
  "secrecy",
  "serde",
@@ -385,7 +387,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bb-core",
+ "bs58",
  "bullet-rust-sdk",
+ "getrandom 0.2.17",
+ "reqwest 0.13.2",
  "rust_decimal",
  "secrecy",
  "serde",
@@ -1329,6 +1334,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "dunce"
@@ -3587,9 +3598,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "aws-lc-rs",
  "bytes",

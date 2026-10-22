@@ -164,6 +164,8 @@ pub struct MockBroker {
     /// the queued result is returned as-is, bypassing the default all-success path.
     cancel_results_queue: Mutex<VecDeque<Vec<CancelResult>>>,
     cancel_all_queue: Mutex<VecDeque<Result<(), BotError>>>,
+    /// Positions returned by `get_positions` (default empty).
+    positions: Mutex<Vec<Position>>,
 }
 
 /// Backwards-compat alias.
@@ -179,7 +181,13 @@ impl MockBroker {
             cancel_queue: Mutex::new(VecDeque::new()),
             cancel_results_queue: Mutex::new(VecDeque::new()),
             cancel_all_queue: Mutex::new(VecDeque::new()),
+            positions: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Set the positions returned by `get_positions`.
+    pub async fn set_positions(&self, positions: Vec<Position>) {
+        *self.positions.lock().await = positions;
     }
 
     pub fn shared(name: impl Into<String>) -> Arc<Self> {
@@ -269,7 +277,7 @@ impl Broker for MockBroker {
     }
 
     async fn get_positions(&self) -> Result<Vec<Position>, BotError> {
-        Ok(vec![])
+        Ok(self.positions.lock().await.clone())
     }
 
     async fn get_open_orders(&self, _symbol: &str) -> Result<Vec<Order>, BotError> {

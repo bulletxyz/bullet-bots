@@ -79,10 +79,17 @@ Adjust for venues that use a different suffix convention.
 
 ## Auth / key material
 
-- Never put private keys in configs. Read from env vars or a keystore file.
+- Never put private keys in configs. Read from env vars or a key file.
 - Wrap raw key strings in `secrecy::SecretString` in your config struct.
-- Use `secrecy::ExposeSecret::expose_secret(&config.private_key_hex)` only
+- Use `secrecy::ExposeSecret::expose_secret(&config.private_key)` only
   at the point of actual key use, not earlier.
+
+Bullet API docs are machine-readable: see
+<https://tradingapi.bullet.xyz/llms.txt> for an index, the raw OpenAPI spec at
+<https://tradingapi.bullet.xyz/docs/rest/openapi.json>, and the
+[delegate accounts](https://tradingapi.bullet.xyz/docs/delegate-accounts.md)
+guide (delegate keys 404 on account reads — resolve the master via
+`/api/v1/delegateOf` first).
 
 ## Reconnect patterns
 

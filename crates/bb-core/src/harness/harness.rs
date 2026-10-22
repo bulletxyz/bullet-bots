@@ -128,7 +128,7 @@ impl Harness {
         // 4. Wait for a shutdown-inducing event.
         let signal_fut = async {
             if self.enable_signal {
-                let _ = tokio::signal::ctrl_c().await;
+                wait_for_shutdown_signal().await;
             } else {
                 std::future::pending::<()>().await;
             }
@@ -150,7 +150,7 @@ impl Harness {
                     break WindDownReason::Signal;
                 }
                 () = &mut signal_fut => {
-                    tracing::info!("Ctrl-C received");
+                    tracing::info!("shutdown signal received");
                     break WindDownReason::Signal;
                 }
                 Some(join_res) = feed_set.join_next() => {
@@ -180,6 +180,33 @@ impl Harness {
 
         wind_down_all(actor_handles, reason, shutdown).await
     }
+}
+
+/// Wait for an OS shutdown signal, then return so the harness runs a graceful
+/// `wind_down` (including any position flatten). Catches Ctrl-C (SIGINT) on all
+/// platforms and **SIGTERM** on Unix — the signal `docker stop`, systemd, and
+/// Kubernetes send — so a managed shutdown flattens positions, not just an
+/// interactive Ctrl-C.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to install SIGTERM handler; Ctrl-C only");
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT (Ctrl-C) received"),
+        _ = sigterm.recv() => tracing::info!("SIGTERM received"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// Cancel subscriptions, drain handler tasks, call `wind_down` on every actor.

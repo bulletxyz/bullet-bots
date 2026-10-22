@@ -279,8 +279,8 @@ status_port = 3030
 type = "bullet"
 network = "testnet"
 # Key material — do NOT put private keys in this file.
-# Option 1 (preferred): key_file = "/path/to/id.json"  (run `bb-bot keygen`)
-# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+# Option 1 (preferred): key_file = "/path/to/id.key"  (run `bb-bot keygen`)
+# Option 2 (CI/ephemeral): export BB_BULLET_PRIVATE_KEY="<base58 key>"
 
 [strategy]
 type = "dip-buyer"
@@ -297,7 +297,7 @@ max_position = "0.01"
 Run:
 
 ```sh
-export BB_BULLET_PRIVATE_KEY_HEX="0x..."
+export BB_BULLET_PRIVATE_KEY="<base58 key>"
 cargo run --bin bb-bot -- run --config config/dip-buyer-example.toml
 ```
 

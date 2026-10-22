@@ -5,7 +5,7 @@ use bb_core::helpers::parse_decimal_or_warn;
 use bb_core::types::{Balance, Order, OrderBook, OrderStatus, OrderType, Position, Side};
 use hyperliquid_rust_sdk::{
     ActiveAssetCtxData, AssetCtx, L2BookData, L2SnapshotResponse, OrderUpdate, TradeInfo,
-    UserStateResponse,
+    UserStateResponse, UserTokenBalanceResponse,
 };
 use rust_decimal::Decimal;
 
@@ -16,6 +16,19 @@ const EXCHANGE: &str = "hyperliquid";
 /// HL uses bare coin names ("BTC"); we use "BTC-USD".
 pub fn to_bb_symbol(hl_coin: &str) -> String {
     format!("{hl_coin}-USD")
+}
+
+/// Round an order price to Hyperliquid's precision rule: at most **5
+/// significant figures** for perps. HL rejects over-precise prices with
+/// "Order has invalid price" (e.g. `64710.599`, which is 6 sig figs). Rounding
+/// to 5 sig figs yields a valid on-tick price (`64711`). Integer prices are
+/// always valid, so large prices pass through unchanged.
+///
+/// Note: HL also caps decimals at `MAX_DECIMALS - szDecimals` (6 for perps),
+/// which only binds for sub-dollar assets; `round_sf(5)` already keeps decimals
+/// within that for any price ≳ $0.0001, covering the assets traded here.
+pub fn hl_round_price(price: Decimal) -> Decimal {
+    price.round_sf(5).unwrap_or(price).normalize()
 }
 
 /// Strip "-USD" suffix to get the HL coin name.
@@ -49,6 +62,23 @@ pub fn user_state_to_balances(resp: &UserStateResponse) -> Vec<Balance> {
         available: parse_dec(&resp.withdrawable),
         total: parse_dec(&resp.margin_summary.account_value),
     }]
+}
+
+/// Balances from the spot clearinghouse — used for unified accounts, where the
+/// USDC collateral lives in the spot balance rather than the perp account.
+/// `available = total - hold` (hold = margin locked in open positions).
+pub fn spot_state_to_balances(resp: &UserTokenBalanceResponse) -> Vec<Balance> {
+    resp.balances
+        .iter()
+        .map(|b| {
+            // Warn (not silently zero) on malformed numerics, matching how
+            // positions/trades parse elsewhere in this module.
+            let total = parse_decimal_or_warn(&b.total, "spot total").unwrap_or(Decimal::ZERO);
+            let hold = parse_decimal_or_warn(&b.hold, "spot hold").unwrap_or(Decimal::ZERO);
+            Balance { asset: b.coin.clone(), available: total - hold, total }
+        })
+        .filter(|b| !b.total.is_zero())
+        .collect()
 }
 
 pub fn user_state_to_positions(resp: &UserStateResponse) -> Vec<Position> {
@@ -198,5 +228,41 @@ mod tests {
     fn parse_dec_handles_garbage() {
         assert_eq!(parse_dec("not_a_number"), Decimal::ZERO);
         assert_eq!(parse_dec("123.456"), Decimal::new(123_456, 3));
+    }
+
+    #[test]
+    fn hl_round_price_to_5_sig_figs() {
+        // 6 sig figs → rejected by HL; round to 5.
+        assert_eq!(hl_round_price(Decimal::new(64_710_599, 3)), Decimal::new(64711, 0)); // 64710.599 → 64711
+        // Sub-dollar keeps 5 sig figs of precision.
+        assert_eq!(hl_round_price(Decimal::new(123_456_789, 8)), Decimal::new(12346, 4)); // 1.23456789 → 1.2346
+        // Already ≤5 sig figs is unchanged.
+        assert_eq!(hl_round_price(Decimal::new(64711, 0)), Decimal::new(64711, 0));
+    }
+
+    #[test]
+    fn spot_balances_use_total_minus_hold_and_drop_zero() {
+        use hyperliquid_rust_sdk::{UserTokenBalance, UserTokenBalanceResponse};
+        let resp = UserTokenBalanceResponse {
+            balances: vec![
+                UserTokenBalance {
+                    coin: "USDC".to_string(),
+                    hold: "2.04".to_string(),
+                    total: "997.59".to_string(),
+                    entry_ntl: "0.0".to_string(),
+                },
+                UserTokenBalance {
+                    coin: "TZERO".to_string(),
+                    hold: "0.0".to_string(),
+                    total: "0.0".to_string(),
+                    entry_ntl: "0.0".to_string(),
+                },
+            ],
+        };
+        let bals = spot_state_to_balances(&resp);
+        assert_eq!(bals.len(), 1, "zero-total balances dropped");
+        assert_eq!(bals[0].asset, "USDC");
+        assert_eq!(bals[0].total, Decimal::new(99759, 2));
+        assert_eq!(bals[0].available, Decimal::new(99555, 2)); // 997.59 - 2.04
     }
 }

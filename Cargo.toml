@@ -25,11 +25,15 @@ toml = "0.8"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 thiserror = "2"
 secrecy = { version = "0.8", features = ["serde"] }
+bs58 = "0.5"
+getrandom = "0.2"
+reqwest = { version = "0.13", features = ["json"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 axum = "0.8"
+dotenvy = "0.15"
 
 # Internal crates
 bb-core = { path = "crates/bb-core" }

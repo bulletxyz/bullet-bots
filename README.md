@@ -28,49 +28,85 @@ events are structurally impossible.
 For an annotated component diagram, event-flow walkthrough, adapter layout
 rules, and the broker contract, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Quick start
+## Quick start — testing (testnet, ~5 minutes)
+
+The fastest path: a throwaway testnet key funded from the faucet. **No wallet,
+no web UI, no real funds.** This is the recommended way to try the bot.
 
 ```sh
-# Build
 cargo build
+cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml   # no keys needed
 
-# Run tests
-cargo nextest run
-
-# Validate a starter config (no keys needed)
-cargo run --bin bb-bot -- validate --config config/simple-mm-example.toml
-
-# Generate a Bullet testnet key, fund it with the printed faucet curl,
-# deposit into the perp margin account, then run the starter market maker.
+# 1. Generate a testnet burner key → writes ~/.config/bullet/id.key (0600),
+#    prints your address and the exact faucet command.
 cargo run --bin bb-bot -- keygen --network testnet
-# ...run the faucet curl printed above, then deposit into the margin account:
+
+# 2. Fund it from the faucet.
+cargo run --bin bb-bot -- faucet --network testnet
+#    The faucet is rate-limited and Cloudflare-protected; if this 403s, use the
+#    web faucet at https://app.testnet.bullet.xyz and fund your printed address.
+
+# 3. Move funds into the perp margin account. This also initializes the trading
+#    account — without it, order placement fails with `user_variants not found`.
 cargo run --bin bb-bot -- deposit --network testnet --asset USDC --amount 5000
+
+# 4. Run the starter market maker (reads ~/.config/bullet/id.key by default).
 cargo run --bin bb-bot -- run --config config/simple-mm-example.toml
 ```
 
-Recommended first path:
+Other commands: `observe` (collect Bullet/Binance spread data, no trading),
+`flatten` (cancel orders + market-close positions), `validate` (preflight a config).
 
-1. `keygen` — create a testnet key.
-2. Fund it with the faucet command printed by `keygen`. The faucet credits your
-   on-chain wallet, not your trading account. The faucet is **testnet only** —
-   on mainnet you fund the wallet with real bridged/deposited assets instead.
-3. `deposit` — move funds from the on-chain wallet into the perp margin account
-   (e.g. `deposit --network testnet --asset USDC --amount 5000`). The asset must
-   match a name in Bullet's exchangeInfo (e.g. `USDC`) and the amount is in that
-   asset's units. This also initializes the trading account; without it, order
-   placement fails with `user_variants not found`.
-4. `observe` — collect Bullet/Binance spread data without trading.
-5. `validate` — preflight the config.
-6. `run` — start tiny, watch logs plus `GET /status`.
-7. `flatten` — cancel and close manually if you need to clean up.
+## Production (mainnet, real funds)
+
+**Do not run mainnet with a `keygen` burner** — that puts a key controlling real
+funds inside the bot. Instead use a **delegate** (Bullet) / **API wallet**
+(Hyperliquid): a separate key scoped to trading only (cannot deposit or
+withdraw), revocable from the webapp at any time, so the bot never holds a key
+that can drain your wallet.
+
+1. Sign in at [app.bullet.xyz](https://app.bullet.xyz) with your wallet (e.g.
+   Phantom) — this creates the embedded wallet that is your Bullet trading account.
+2. Deposit collateral through the webapp.
+3. Create a delegate (see the
+   [delegate setup guide](https://docs.bullet.xyz/bulletx-exchange/how-to-guide/delegate-account-setup)),
+   then put its **base58** key in `.env` as `BB_BULLET_PRIVATE_KEY` (or save it
+   to a file and point `BB_BULLET_KEY_FILE` at it).
+4. For Hyperliquid, create an API wallet at
+   [app.hyperliquid.xyz/API](https://app.hyperliquid.xyz/API). Set
+   `BB_HYPERLIQUID_PRIVATE_KEY` to the **API-wallet key** (hex), and
+   `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to your **main account address** (the `0x…`
+   shown in the HL UI). The API wallet signs; positions/balances/fills are read
+   from the main account.
+5. Set `network = "mainnet"` in the config's `[exchanges.*]` sections.
+
+> **What is a delegate / API wallet?** A separate keypair authorized to trade on
+> behalf of your account. It can place and cancel orders but **cannot deposit or
+> withdraw**, and you can revoke it from the webapp at any time — so you trade
+> without exposing your main wallet's private key. On both venues the bot signs
+> with this key but reads account state from the **main account** — Bullet
+> resolves the master automatically via `delegateOf`; on Hyperliquid you supply
+> it via `BB_HYPERLIQUID_ACCOUNT_ADDRESS`.
+
+Put these in `.env` — `bb-bot` auto-loads `./.env` at startup, so
+`cp .env.example .env`, fill it in, and run. (Use `--env-file <path>` to load a
+different file; real environment variables already set take precedence.)
 
 ## Key management
 
-Private keys are passed via environment variables or keystore files, not copied
-into example configs. Two options:
+Keys use each venue's native format — **paste exactly what the UI gives you**:
+**base58 for Bullet** (Phantom / delegation export), **hex for Hyperliquid** (the
+HL API page). Never put them in `config/*.toml`.
 
-- **Bullet key file (recommended):** generate once with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` or add `key_file = "/path/to/id.json"` under `[exchanges.bullet]`.
-- **Hex key:** set `BB_BULLET_PRIVATE_KEY_HEX` / `BB_HYPERLIQUID_PRIVATE_KEY_HEX`, e.g. via a `.env` file (already gitignored).
+- **Key string in `.env` (typical):** set `BB_BULLET_PRIVATE_KEY` (base58) and
+  `BB_HYPERLIQUID_PRIVATE_KEY` (hex); auto-loaded from `.env`. When the
+  Hyperliquid key is an API wallet, also set `BB_HYPERLIQUID_ACCOUNT_ADDRESS` to
+  your main account address.
+- **Key file (keeps the secret off the environment):** for Bullet, generate one
+  with `cargo run --bin bb-bot -- keygen`, then set `BB_BULLET_KEY_FILE` (or
+  `key_file` in `[exchanges.bullet]`). Both venues accept `key_file` /
+  `BB_<VENUE>_KEY_FILE` — a file containing the key string; it takes precedence
+  over the inline key.
 
 ## Strategies
 
