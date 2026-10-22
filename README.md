@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/bulletxyz/bullet-bots/actions/workflows/ci.yml/badge.svg)](https://github.com/bulletxyz/bullet-bots/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+[![Rust 1.90+](https://img.shields.io/badge/rust-1.90+-orange.svg)](https://www.rust-lang.org)
 
 Live-trading-capable reference framework for [Bullet](https://bullet.xyz) perpetuals and other exchanges — written in Rust, with a small typed runtime for building event-driven bots.
 
@@ -204,7 +204,7 @@ and clarifies where to build extensions:
 
 ## Requirements
 
-- Rust 1.85+ (edition 2024)
+- Rust 1.90+ (edition 2024)
 - `cargo +nightly fmt` for formatting (optional)
 
 ## Risk Disclaimer

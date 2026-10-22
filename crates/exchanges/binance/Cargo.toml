@@ -2,6 +2,7 @@
 name = "bb-exchange-binance"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Binance read-only reference price feed for bullet-bots"
 

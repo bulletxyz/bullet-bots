@@ -330,7 +330,7 @@ TOML. Top-level sections: `[engine]`, `[exchanges.<name>]`, `[strategy]`,
 
 ## Code Style
 
-- Edition 2024, MSRV 1.85
+- Edition 2024, MSRV 1.90
 - `cargo +nightly fmt` (imports grouped: std, external, crate)
 - Clippy pedantic with overrides for trading-code noise (see `[workspace.lints.clippy]`)
 - `unsafe_code = "deny"`

@@ -38,7 +38,7 @@ pub struct HyperliquidConfig {
 }
 
 fn default_secret() -> SecretString {
-    SecretString::new(String::new())
+    SecretString::from(String::new())
 }
 
 #[cfg(test)]
@@ -54,7 +54,7 @@ mod tests {
         let cfg = HyperliquidConfig {
             network: "testnet".into(),
             key_file: None,
-            private_key: SecretString::new(FAKE_KEY.to_string()),
+            private_key: SecretString::from(FAKE_KEY.to_string()),
             account_address: None,
         };
         let dbg = format!("{cfg:?}");

@@ -9,7 +9,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "MIT"
 version = "0.1.0"
 
@@ -17,14 +17,14 @@ version = "0.1.0"
 # Core
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "0.9"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 thiserror = "2"
-secrecy = { version = "0.8", features = ["serde"] }
+secrecy = { version = "0.10", features = ["serde"] }
 bs58 = "0.5"
 getrandom = "0.2"
 reqwest = { version = "0.13", features = ["json"] }
@@ -47,7 +47,7 @@ bb-strategy-avellaneda-stoikov = { path = "crates/strategies/avellaneda-stoikov"
 bb-strategy-reference-arb = { path = "crates/strategies/reference-arb" }
 
 # Bullet SDK
-bullet-rust-sdk = { version = "0.0.27", default-features = false }
+bullet-rust-sdk = { version = "0.0.43", default-features = false }
 
 # Hyperliquid SDK
 hyperliquid_rust_sdk = "0.6"

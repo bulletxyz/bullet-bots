@@ -34,7 +34,7 @@ pub struct BulletConfig {
 }
 
 fn default_secret() -> SecretString {
-    SecretString::new(String::new())
+    SecretString::from(String::new())
 }
 
 #[cfg(test)]
@@ -50,7 +50,7 @@ mod tests {
         let cfg = BulletConfig {
             network: "testnet".into(),
             key_file: None,
-            private_key: SecretString::new(FAKE_KEY.to_string()),
+            private_key: SecretString::from(FAKE_KEY.to_string()),
         };
         let dbg = format!("{cfg:?}");
         assert!(!dbg.contains(FAKE_KEY), "Debug output must not contain key: {dbg}");
