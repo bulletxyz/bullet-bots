@@ -660,9 +660,13 @@ async fn faucet(network: String) -> Result<(), Box<dyn std::error::Error>> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        // A 409 means the address already has a trading account; the faucet
-        // only funds fresh wallets, so deposit from the existing balance instead.
-        return Err(format!("Faucet request failed (HTTP {status}): {body}").into());
+        return Err(format!(
+            "Faucet request failed (HTTP {status}): {body}\n\
+             It may be rate-limited, or the address may already have an account. \
+             Use the web faucet instead: https://app.testnet.bullet.xyz \
+             (fund address {address})."
+        )
+        .into());
     }
     // A 2xx with a non-JSON body (e.g. an HTML challenge page) is not a funding
     // receipt, so never report it as a success.
