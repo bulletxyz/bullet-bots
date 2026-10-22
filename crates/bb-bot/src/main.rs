@@ -23,6 +23,9 @@ use bb_strategy_grid::{GridActor, GridConfig};
 use bb_strategy_reference_arb::{ReferenceArbActor, ReferenceArbConfig};
 use bb_strategy_simple_mm::{SimpleMmActor, SimpleMmConfig};
 use bullet_rust_sdk::types::bullet_exchange_interface;
+use bullet_rust_sdk::types::bullet_exchange_interface::message::TransferEndpoint;
+use bullet_rust_sdk::types::bullet_exchange_interface::string::CustomString;
+use bullet_rust_sdk::types::bullet_exchange_interface::types::BalanceBucket;
 use bullet_rust_sdk::{
     CallMessage, Client, Keypair, Network, PositiveDecimal, Transaction, UserAction,
 };
@@ -621,7 +624,7 @@ fn bullet_config_from_env(network: String) -> BulletConfig {
                 }
             },
         );
-    BulletConfig { network, key_file, private_key: SecretString::new(private_key) }
+    BulletConfig { network, key_file, private_key: SecretString::from(private_key) }
 }
 
 /// Build a [`HyperliquidConfig`] from the environment for standalone commands
@@ -639,7 +642,7 @@ fn hyperliquid_config_from_env(network: String) -> Option<HyperliquidConfig> {
     Some(HyperliquidConfig {
         network,
         key_file,
-        private_key: SecretString::new(private_key.unwrap_or_default()),
+        private_key: SecretString::from(private_key.unwrap_or_default()),
         account_address: std::env::var("BB_HYPERLIQUID_ACCOUNT_ADDRESS")
             .ok()
             .filter(|v| !v.is_empty()),
@@ -655,7 +658,7 @@ async fn faucet(network: String) -> Result<(), Box<dyn std::error::Error>> {
         return Err("Faucet is only available on testnet".into());
     }
     let address = load_deposit_keypair()?.address();
-    let url = format!("https://app.testnet.bullet.xyz/api/testnet/faucet?address={address}");
+    let url = format!("https://api.testnet.bullet.xyz/faucet?address={address}");
     let resp = reqwest::Client::new().post(&url).header("User-Agent", "Mozilla/5.0").send().await?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -702,7 +705,15 @@ async fn deposit(
 
     println!("Depositing {amount} {asset} (asset_id={}) from {address}", asset_entry.asset_id);
 
-    let call_msg = CallMessage::User(UserAction::Deposit { asset_id, amount: positive });
+    // Move the on-chain wallet balance (`Bank`) into the cross-margin account.
+    let call_msg = CallMessage::User(UserAction::Transfer {
+        from: TransferEndpoint { sub_account_index: None, balance: BalanceBucket::Bank },
+        to: TransferEndpoint { sub_account_index: None, balance: BalanceBucket::Cross },
+        to_address: None,
+        asset_id,
+        amount: positive,
+        memo: CustomString::from("bb-bot deposit"),
+    });
     let signed = Transaction::builder().call_message(call_msg).client(&client).build()?;
     let resp = client.send_transaction(&signed).await?;
     println!("Deposit submitted. tx_id={}", resp.id);
