@@ -20,9 +20,10 @@ use bb_core::error::BotError;
 use bb_core::events::{BookUpdate, MarkPriceUpdate, OrderLifecycle, Trade};
 use bb_core::harness::MpscFeed;
 use bb_core::health::ConnectionHealth;
+use bb_core::helpers::RecentIds;
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::H160;
-use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription};
+use hyperliquid_rust_sdk::{BaseUrl, ExchangeClient, InfoClient, Message, Subscription, TradeInfo};
 use tokio::sync::mpsc;
 
 use crate::broker::{ClientIdMap, HyperliquidBroker, new_client_id_map};
@@ -34,6 +35,11 @@ use crate::convert;
 /// unbounded: missing fills permanently corrupts position tracking.
 const BOOK_CHANNEL_CAPACITY: usize = 4_096;
 const MARK_CHANNEL_CAPACITY: usize = 256;
+
+/// Cap on remembered fill ids for replay dedup — mirrors the Bullet adapter.
+/// A reconnect replays only a small recent window, so this bounds memory while
+/// being far more than enough.
+const MAX_SEEN_TRADE_IDS: usize = 8_192;
 
 /// HL's WS sends data continuously (`AllMids` ~250ms, `ActiveAssetCtx`, depth);
 /// a gap longer than this is treated as a transparent reconnect, triggering
@@ -170,6 +176,42 @@ pub async fn connect(
     Ok((broker, feeds))
 }
 
+/// Decide which `userFills` entries to emit as `Trade`s, updating dedup state.
+///
+/// Hyperliquid replays a historical fill snapshot on every (re)subscribe
+/// (`is_snapshot = true`). The *initial* snapshot after startup duplicates the
+/// REST `get_positions()` seed, so its fills are recorded (to suppress later
+/// duplicates) but not emitted. Every fill after that is emitted at most once,
+/// keyed on `trade_id` (`tid`): this drops reconnect-snapshot replays while
+/// still surfacing a genuinely new fill that landed during a disconnect gap
+/// (inventory is not otherwise re-seeded on reconnect).
+fn fills_to_emit(
+    fills: &[TradeInfo],
+    is_snapshot: bool,
+    fills_primed: &mut bool,
+    seen: &mut RecentIds,
+    client_ids: &ClientIdMap,
+    target_coin: &str,
+) -> Vec<Trade> {
+    let initial_snapshot = is_snapshot && !*fills_primed;
+    let mut out = Vec::new();
+    for fill in fills.iter().filter(|f| f.coin == target_coin) {
+        if let Some(trade) = convert::fill_to_trade(fill, client_ids) {
+            let first_time = match &trade.trade_id {
+                Some(id) => seen.insert(id),
+                None => true, // no id to dedup on — emit
+            };
+            if first_time && !initial_snapshot {
+                out.push(trade);
+            }
+        }
+    }
+    if is_snapshot {
+        *fills_primed = true;
+    }
+    out
+}
+
 /// Muxer task — reads the WS message stream, classifies each `Message`, and
 /// forwards converted events into the typed channels. Holds `ws_info` so the
 /// WS connection stays alive for the lifetime of the task.
@@ -196,6 +238,10 @@ async fn muxer_loop(
     // a reconnect — worth surfacing.
     let mut last_order_timestamp: u64 = 0;
     let mut last_msg_at = Instant::now();
+    // Dedup for `userFills`: HL replays a historical snapshot on every
+    // (re)subscribe, which would otherwise double-count the position.
+    let mut seen_fills = RecentIds::new(MAX_SEEN_TRADE_IDS);
+    let mut fills_primed = false;
     loop {
         let recv = tokio::time::timeout(HL_WS_QUIET_THRESHOLD, ws_rx.recv()).await;
         let msg = match recv {
@@ -254,10 +300,16 @@ async fn muxer_loop(
                 }
             }
             Message::UserFills(f) => {
-                for fill in f.data.fills.iter().filter(|f| f.coin == target_coin) {
-                    if let Some(trade) = convert::fill_to_trade(fill, &client_ids) {
-                        let _ = trade_tx.send(trade);
-                    }
+                let is_snapshot = f.data.is_snapshot.unwrap_or(false);
+                for trade in fills_to_emit(
+                    &f.data.fills,
+                    is_snapshot,
+                    &mut fills_primed,
+                    &mut seen_fills,
+                    &client_ids,
+                    &target_coin,
+                ) {
+                    let _ = trade_tx.send(trade);
                 }
             }
             Message::AllMids(m) => {
@@ -388,5 +440,95 @@ mod tests {
         assert!(account_mode_is_unified("\"unifiedAccount\""));
         assert!(!account_mode_is_unified("\"standardAccount\""));
         assert!(!account_mode_is_unified("null"));
+    }
+}
+
+#[cfg(test)]
+mod fill_dedup_tests {
+    use super::*;
+
+    fn fill(coin: &str, tid: u64) -> TradeInfo {
+        TradeInfo {
+            coin: coin.to_string(),
+            side: "B".to_string(),
+            px: "100".to_string(),
+            sz: "1".to_string(),
+            time: 0,
+            hash: String::new(),
+            start_position: "0".to_string(),
+            dir: "Open Long".to_string(),
+            closed_pnl: "0".to_string(),
+            oid: 1,
+            cloid: None,
+            crossed: false,
+            fee: "0".to_string(),
+            fee_token: "USDC".to_string(),
+            tid,
+        }
+    }
+
+    #[test]
+    fn initial_snapshot_is_recorded_but_not_emitted() {
+        let mut primed = false;
+        let mut seen = RecentIds::new(64);
+        let ids = new_client_id_map();
+        let emitted = fills_to_emit(
+            &[fill("BTC", 1), fill("BTC", 2)],
+            true,
+            &mut primed,
+            &mut seen,
+            &ids,
+            "BTC",
+        );
+        assert!(emitted.is_empty(), "initial snapshot fills must not be emitted");
+        assert!(primed, "snapshot marks the fill stream primed");
+        // The tids were recorded: a later live push of the same fill is dropped.
+        let again = fills_to_emit(&[fill("BTC", 1)], false, &mut primed, &mut seen, &ids, "BTC");
+        assert!(again.is_empty(), "already-seen tid is dropped");
+    }
+
+    #[test]
+    fn live_fill_emitted_exactly_once() {
+        let mut primed = true; // stream already primed past the initial snapshot
+        let mut seen = RecentIds::new(64);
+        let ids = new_client_id_map();
+        let first = fills_to_emit(&[fill("BTC", 10)], false, &mut primed, &mut seen, &ids, "BTC");
+        assert_eq!(first.len(), 1, "a new live fill is emitted once");
+        let dup = fills_to_emit(&[fill("BTC", 10)], false, &mut primed, &mut seen, &ids, "BTC");
+        assert!(dup.is_empty(), "duplicate live fill is dropped");
+    }
+
+    #[test]
+    fn reconnect_snapshot_emits_only_the_gap_fill() {
+        let mut primed = false;
+        let mut seen = RecentIds::new(64);
+        let ids = new_client_id_map();
+        // Initial snapshot: tids 1,2 recorded, not emitted.
+        fills_to_emit(&[fill("BTC", 1), fill("BTC", 2)], true, &mut primed, &mut seen, &ids, "BTC");
+        // Live fill tid 3.
+        assert_eq!(
+            fills_to_emit(&[fill("BTC", 3)], false, &mut primed, &mut seen, &ids, "BTC").len(),
+            1
+        );
+        // Reconnect snapshot replays 1,2,3 and carries a new gap fill tid 4.
+        let after = fills_to_emit(
+            &[fill("BTC", 1), fill("BTC", 2), fill("BTC", 3), fill("BTC", 4)],
+            true,
+            &mut primed,
+            &mut seen,
+            &ids,
+            "BTC",
+        );
+        assert_eq!(after.len(), 1, "only the new gap fill is emitted on reconnect");
+        assert_eq!(after[0].trade_id.as_deref(), Some("4"));
+    }
+
+    #[test]
+    fn fills_for_other_coins_are_ignored() {
+        let mut primed = true;
+        let mut seen = RecentIds::new(64);
+        let ids = new_client_id_map();
+        let emitted = fills_to_emit(&[fill("ETH", 5)], false, &mut primed, &mut seen, &ids, "BTC");
+        assert!(emitted.is_empty(), "fills for a non-target coin are filtered out");
     }
 }
